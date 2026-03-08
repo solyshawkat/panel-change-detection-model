@@ -1,0 +1,33 @@
+# PCD-AI Service Dependencies
+
+# -- Web Framework --
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# -- Database --
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+
+# -- Image Processing --
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+Pillow==11.1.0
+scikit-image==0.24.0
+
+# -- ML Models --
+scikit-learn==1.6.1
+joblib==1.4.2
+
+# -- HTTP Client (image download) --
+httpx==0.28.1
+
+# -- Service Discovery --
+py_eureka_client==0.11.10
+
+# -- CLIP (M2 - Fraud Detection) --
+torch>=2.1.0
+transformers>=4.36.0
+
+# -- SuperPoint + LightGlue (M3 - Alignment) --
+lightglue @ git+https://github.com/cvg/LightGlue.git

@@ -1,0 +1,78 @@
+{
+  "model_name": "SVM_rbf_C0.01_reduced7",
+  "features": [
+    "max_diff_connected_max_area",
+    "ratio_top5_to_ssim",
+    "stability_weighted",
+    "max_ms_ssim_change",
+    "cluster_score",
+    "min_top5pct_change",
+    "max_change_peakedness"
+  ],
+  "n_features": 7,
+  "scoring_method": "predict_proba",
+  "threshold": 0.389,
+  "svm_params": {
+    "kernel": "rbf",
+    "C": 0.01,
+    "gamma": "scale",
+    "class_weight": "balanced"
+  },
+  "scaler_params": {
+    "mean": [
+      0.08286371739130435,
+      2.5158559130434774,
+      0.3126089565217392,
+      0.49273500000000015,
+      0.041767304347826086,
+      0.6012067173913043,
+      1.9042943478260865
+    ],
+    "scale": [
+      0.014431443208227866,
+      0.26517074184339234,
+      0.038466921531733526,
+      0.0443179081955149,
+      0.026257274965293415,
+      0.12927499989046995,
+      0.1690019376858581
+    ],
+    "feature_names": [
+      "max_diff_connected_max_area",
+      "ratio_top5_to_ssim",
+      "stability_weighted",
+      "max_ms_ssim_change",
+      "cluster_score",
+      "min_top5pct_change",
+      "max_change_peakedness"
+    ]
+  },
+  "training_data": {
+    "n_samples": 46,
+    "n_changed": 21,
+    "n_normal": 25
+  },
+  "loocv_results": {
+    "tp_rate": 1.0,
+    "fp_rate": 0.0,
+    "threshold": 0.389,
+    "normal_proba_range": [
+      0.382537,
+      0.388081
+    ],
+    "changed_proba_range": [
+      0.506916,
+      0.512063
+    ],
+    "gap": 0.118834
+  },
+  "notes": [
+    "7 features selected from 84 via importance ranking + correlation gating (|r| < 0.75)",
+    "DINOv2 dropped from classifier (saves ~400MB) \u2014 gap unchanged at 0.119",
+    "Uses predict_proba >= 0.389 (LOOCV-validated, Platt scaling corrects boundary inversion)",
+    "Training-data scores appear flat (~0.38) \u2014 this is EXPECTED with C=0.01",
+    "New data behaves like LOOCV holdout: normal ~0.385, changed ~0.509",
+    "Normal margins are tight (0.001 in proba space) \u2014 watch for unusual normals",
+    "Upgrade to more features when dataset reaches 200+ labeled examples"
+  ]
+}

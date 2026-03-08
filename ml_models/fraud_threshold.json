@@ -1,0 +1,8 @@
+{
+  "clip_model": "openai/clip-vit-base-patch32",
+  "fraud_threshold": 0.751,
+  "same_panel_min_score": 0.8834,
+  "same_panel_avg_score": 0.9484,
+  "unrelated_max_score": 0.6195,
+  "usage": "If CLIP similarity between patrol photo and reference < threshold, reject as fraud/wrong panel"
+}

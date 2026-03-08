@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.env
+storage/baselines/*
+storage/heatmaps/*
+!storage/baselines/.gitkeep
+!storage/heatmaps/.gitkeep
+*.egg-info/
+.venv/
+
+# Large ML model files (downloaded at runtime via scripts/download_models.py)
+*.pt
+*.pth
+*.bin
+torch/
+# HuggingFace cache
+.cache/
+
+# Keep small model files tracked (SVM, configs)
+# ml_models/model.joblib  (~6KB, OK to track)
+# ml_models/*.json         (~2KB each, OK to track)
