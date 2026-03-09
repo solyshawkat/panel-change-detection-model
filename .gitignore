@@ -7,6 +7,7 @@ storage/heatmaps/*
 !storage/heatmaps/.gitkeep
 *.egg-info/
 .venv/
+venv/
 
 # Large ML model files (downloaded at runtime via scripts/download_models.py)
 *.pt

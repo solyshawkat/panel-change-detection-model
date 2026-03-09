@@ -20,7 +20,7 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 DATABASE = {
     "host": os.getenv("DB_HOST", "10.80.3.231"),
     "port": int(os.getenv("DB_PORT", 5433)),
-    "name": os.getenv("DB_NAME", "pcd_ai"),
+    "name": os.getenv("DB_NAME", "eden_crm_sec_crm"),
     "username": os.getenv("DB_USERNAME", "pcd_user"),
     "password": os.getenv("DB_PASSWORD", ""),
     "schema": os.getenv("DB_SCHEMA", "public"),
