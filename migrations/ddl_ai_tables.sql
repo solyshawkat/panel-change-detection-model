@@ -51,6 +51,7 @@ CREATE TABLE ai_comparisons (
 
     -- Results
     ratio               FLOAT,              -- SVM probability (change %)
+    similarity_percent  FLOAT,              -- (1 - ratio) * 100
     matching            BOOLEAN,            -- ratio < threshold = matching (no change)
     status              VARCHAR(30) DEFAULT 'PENDING',
                                             -- PENDING | PROCESSING | COMPLETED | FAILED | FRAUD
