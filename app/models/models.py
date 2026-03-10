@@ -1,8 +1,10 @@
 """
 Database models for PCD-AI Service.
-baselines (1) → comparisons (N)
+baselines (1) -> comparisons (N)
 
-Panel identity = location_id + taskcheck_id (unique pair from backend).
+Baseline identified by: task_location_checks_image_id (unique ID from backend).
+Comparison identified by: taskcheck_execution_id (unique ID from backend).
+Matching (true/false) is set by supervisor via feedback, NOT by the pipeline.
 """
 from datetime import datetime
 from sqlalchemy import (
@@ -17,8 +19,7 @@ class Baseline(Base):
     __tablename__ = "ai_baselines"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    location_id = Column(String(50), nullable=False, index=True)
-    taskcheck_id = Column(Integer, nullable=False, index=True)
+    task_location_checks_image_id = Column(Integer, nullable=False, unique=True, index=True)
 
     # Image storage
     image_url = Column(Text, nullable=False)
@@ -38,21 +39,15 @@ class Baseline(Base):
     # Relationships
     comparisons = relationship("Comparison", back_populates="baseline", lazy="dynamic")
 
-    __table_args__ = (
-        Index("idx_ai_baselines_loc_task_active", "location_id", "taskcheck_id", "is_active"),
-        UniqueConstraint("location_id", "taskcheck_id", "is_active",
-                         name="uq_ai_baselines_active_panel",
-                         sqlite_on_conflict="FAIL"),
-    )
-
     def __repr__(self):
-        return f"<Baseline id={self.id} loc={self.location_id} task={self.taskcheck_id} active={self.is_active}>"
+        return f"<Baseline id={self.id} img_id={self.task_location_checks_image_id} active={self.is_active}>"
 
 
 class Comparison(Base):
     __tablename__ = "ai_comparisons"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    taskcheck_execution_id = Column(Integer, nullable=False, unique=True, index=True)
 
     # Relationships
     baseline_id = Column(Integer, ForeignKey("ai_baselines.id"), nullable=False, index=True)
@@ -61,17 +56,17 @@ class Comparison(Base):
     # Input
     patrol_image_url = Column(Text, nullable=False)
 
-    # ── Results ──
-    ratio = Column(Float, nullable=True)          # SVM probability (change %)
-    similarity_percent = Column(Float, nullable=True)  # (1 - ratio) * 100
-    matching = Column(Boolean, nullable=True)      # ratio < threshold = matching
-    status = Column(String(30), default="PENDING") # PENDING, PROCESSING, COMPLETED, FAILED, FRAUD
+    # -- Results --
+    ratio = Column(Float, nullable=True)                # SVM probability (change %)
+    similarity_percent = Column(Float, nullable=True)   # (1 - ratio) * 100
+    matching = Column(Boolean, nullable=True)            # Set by supervisor via feedback, NOT pipeline
+    status = Column(String(30), default="PENDING")       # PENDING | PROCESSING | COMPLETED | FAILED | FRAUD
 
-    # ── Fraud Detection (M2) ──
+    # -- Fraud Detection (M2) --
     is_valid = Column(Boolean, nullable=True)      # CLIP passed
     fraud_score = Column(Float, nullable=True)     # CLIP cosine similarity
 
-    # ── AI Feature Scores (M4) ──
+    # -- AI Feature Scores (M4) --
     # Structure path
     ssim_score = Column(Float, nullable=True)
     ms_ssim_score = Column(Float, nullable=True)
@@ -84,19 +79,17 @@ class Comparison(Base):
     max_hue_shift = Column(Float, nullable=True)
     max_delta_e = Column(Float, nullable=True)
 
-    # ── Alignment (M3) ──
+    # -- Alignment (M3) --
     alignment_inliers = Column(Integer, nullable=True)
-    alignment_method = Column(String(20), nullable=True)  # lightglue / orb
+    alignment_method = Column(String(20), nullable=True)  # lightglue | orb
 
-    # ── Quality ──
+    # -- Quality --
     blur_score = Column(Float, nullable=True)
     heatmap_path = Column(String(500), nullable=True)
     processing_ms = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
 
-    # ── Supervisor Feedback ──
-    supervisor_action = Column(String(30), nullable=True)   # CONFIRM_CHANGE, REJECT_CHANGE, CONFIRM_NORMAL
-    supervisor_notes = Column(Text, nullable=True)
+    # -- Supervisor Feedback --
     supervisor_reviewed_at = Column(DateTime, nullable=True)
 
     # Timestamps
@@ -106,8 +99,7 @@ class Comparison(Base):
     __table_args__ = (
         Index("idx_ai_comparisons_status", "status"),
         Index("idx_ai_comparisons_baseline_created", "baseline_id", "created_at"),
-        Index("idx_ai_comparisons_feedback", "supervisor_action"),
     )
 
     def __repr__(self):
-        return f"<Comparison id={self.id} baseline={self.baseline_id} status={self.status}>"
+        return f"<Comparison id={self.id} exec={self.taskcheck_execution_id} status={self.status}>"
