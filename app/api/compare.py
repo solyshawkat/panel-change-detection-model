@@ -108,6 +108,7 @@ async def create_comparison(
 
     # ── Update comparison record ──
     comparison.ratio = pipeline_result.ratio
+    comparison.similarity_percent = round((1 - pipeline_result.ratio) * 100, 2) if pipeline_result.ratio is not None else None
     comparison.matching = pipeline_result.matching
     comparison.is_valid = pipeline_result.is_valid
     comparison.fraud_score = pipeline_result.fraud_score
@@ -150,7 +151,7 @@ async def create_comparison(
     logger.info(
         f"Comparison complete: id={comparison.id} "
         f"loc={request.location_id} task={request.taskcheck_id} "
-        f"ratio={comparison.ratio:.3f} matching={comparison.matching} "
+        f"ratio={comparison.ratio:.3f} similarity={comparison.similarity_percent:.1f}% matching={comparison.matching} "
         f"valid={comparison.is_valid} {comparison.processing_ms}ms"
     )
 
@@ -160,6 +161,7 @@ async def create_comparison(
         baseline_id=comparison.baseline_id,
         status=comparison.status,
         ratio=comparison.ratio,
+        similarity_percent=comparison.similarity_percent,
         matching=comparison.matching,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,
@@ -197,6 +199,7 @@ async def get_result(
         baseline_id=comparison.baseline_id,
         status=comparison.status,
         ratio=comparison.ratio,
+        similarity_percent=comparison.similarity_percent,
         matching=comparison.matching,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,

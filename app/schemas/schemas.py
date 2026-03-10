@@ -76,6 +76,7 @@ class CompareResponse(BaseModel):
     baseline_id: int
     status: str
     ratio: Optional[float] = None
+    similarity_percent: Optional[float] = None
     matching: Optional[bool] = None
     is_valid: Optional[bool] = None
     fraud_score: Optional[float] = None
