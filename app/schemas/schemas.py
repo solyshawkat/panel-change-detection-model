@@ -13,31 +13,25 @@ from typing import Optional
 
 class BaselineCreateRequest(BaseModel):
     """POST /baseline - Register a new baseline image."""
-    processing_id: str = Field(..., description="Unique identifier for this baseline", max_length=50)
-    panel_id: str = Field(..., description="Panel identifier", max_length=50)
-    site_id: Optional[str] = Field(None, max_length=50)
-    location_id: Optional[str] = Field(None, max_length=50)
-    image_url: str = Field(..., description="URL to download the baseline image (Oracle Cloud)")
+    location_id: str = Field(..., description="Location identifier", max_length=50)
+    taskcheck_id: int = Field(..., description="Task check ID (location_id + taskcheck_id = unique panel)")
+    image_url: str = Field(..., description="URL to download the baseline image")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "processing_id": "BL-001",
-            "panel_id": "PANEL-F3-ELEC-01",
-            "site_id": "SITE-DOWNTOWN",
             "location_id": "LOC-FLOOR3",
+            "taskcheck_id": 1001,
             "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_001.jpg"
         }
     }}
 
 
 class BaselineUpdateRequest(BaseModel):
-    """PUT /baseline/{panel_id} - Replace baseline with new image."""
-    processing_id: str = Field(..., description="New processing ID for the replacement")
+    """PUT /baseline - Replace baseline with new image."""
     image_url: str = Field(..., description="URL to the new baseline image")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "processing_id": "BL-002",
             "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_002.jpg"
         }
     }}
@@ -46,10 +40,8 @@ class BaselineUpdateRequest(BaseModel):
 class BaselineResponse(BaseModel):
     """Response after baseline registration."""
     id: int
-    processing_id: str
-    panel_id: str
-    site_id: Optional[str] = None
-    location_id: Optional[str] = None
+    location_id: str
+    taskcheck_id: int
     is_active: bool
     blur_score: Optional[float] = None
     brightness: Optional[float] = None
@@ -65,17 +57,15 @@ class BaselineResponse(BaseModel):
 
 class CompareRequest(BaseModel):
     """POST /compare - Request a comparison between baseline and patrol image."""
-    definition_id: Optional[int] = Field(None, description="Backend task_check_definition.id")
-    execution_id: Optional[int] = Field(None, description="Backend task_check_execution.id")
-    panel_id: str = Field(..., description="Panel to compare against (looks up active baseline)")
-    patrol_image_url: str = Field(..., description="URL to download the patrol image")
+    location_id: str = Field(..., description="Location identifier")
+    taskcheck_id: int = Field(..., description="Task check ID (looks up active baseline)")
+    image_url: str = Field(..., description="URL to download the patrol image")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "definition_id": 1001,
-            "execution_id": 5023,
-            "panel_id": "PANEL-F3-ELEC-01",
-            "patrol_image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/patrol_5023.jpg"
+            "location_id": "LOC-FLOOR3",
+            "taskcheck_id": 1001,
+            "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/patrol_5023.jpg"
         }
     }}
 

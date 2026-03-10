@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/baseline", tags=["Baseline Service"])
 
 
-
 @router.post("/", response_model=BaselineResponse, status_code=status.HTTP_201_CREATED)
 async def create_baseline(
     request: BaselineCreateRequest,
@@ -29,19 +28,23 @@ async def create_baseline(
 ):
     """
     Register a new baseline image for a panel.
-    
+
+    Panel identity = location_id + taskcheck_id.
     Downloads the image, runs quality checks (blur, brightness),
-    pre-computes CLAHE enhanced version for faster comparisons,
-    and stores everything in the database.
+    pre-computes CLAHE enhanced version for faster comparisons.
     """
-    # Check if processing_id already exists
+    # Check if active baseline already exists for this panel
     existing = await db.execute(
-        select(Baseline).where(Baseline.processing_id == request.processing_id)
+        select(Baseline).where(
+            Baseline.location_id == request.location_id,
+            Baseline.taskcheck_id == request.taskcheck_id,
+            Baseline.is_active == True,
+        )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Baseline with processing_id '{request.processing_id}' already exists"
+            detail=f"Active baseline already exists for location_id='{request.location_id}' taskcheck_id={request.taskcheck_id}. Use PUT to replace."
         )
 
     # Download image
@@ -61,17 +64,16 @@ async def create_baseline(
     # Save enhanced version to disk for fast comparison later
     baseline_dir = Path(config.BASELINE_DIR)
     baseline_dir.mkdir(parents=True, exist_ok=True)
-    enhanced_path = str(baseline_dir / f"{request.processing_id}_enhanced.png")
-    color_path = str(baseline_dir / f"{request.processing_id}_color.jpg")
+    file_prefix = f"{request.location_id}_{request.taskcheck_id}"
+    enhanced_path = str(baseline_dir / f"{file_prefix}_enhanced.png")
+    color_path = str(baseline_dir / f"{file_prefix}_color.jpg")
     cv2.imwrite(enhanced_path, enhanced)
     cv2.imwrite(color_path, image)
 
     # Create database record
     baseline = Baseline(
-        processing_id=request.processing_id,
-        panel_id=request.panel_id,
-        site_id=request.site_id,
         location_id=request.location_id,
+        taskcheck_id=request.taskcheck_id,
         image_url=request.image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
@@ -84,7 +86,7 @@ async def create_baseline(
     await db.refresh(baseline)
 
     logger.info(
-        f"Baseline registered: panel={request.panel_id} "
+        f"Baseline registered: loc={request.location_id} task={request.taskcheck_id} "
         f"blur={quality['blur']:.1f} brightness={quality['brightness']:.1f} "
         f"warning={quality['warning']}"
     )
@@ -92,15 +94,17 @@ async def create_baseline(
     return baseline
 
 
-@router.get("/{panel_id}", response_model=BaselineResponse)
+@router.get("/", response_model=BaselineResponse)
 async def get_baseline(
-    panel_id: str,
+    location_id: str,
+    taskcheck_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the active baseline for a panel."""
+    """Get the active baseline for a panel (location_id + taskcheck_id)."""
     result = await db.execute(
         select(Baseline).where(
-            Baseline.panel_id == panel_id,
+            Baseline.location_id == location_id,
+            Baseline.taskcheck_id == taskcheck_id,
             Baseline.is_active == True,
         )
     )
@@ -108,27 +112,27 @@ async def get_baseline(
     if not baseline:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active baseline found for panel '{panel_id}'"
+            detail=f"No active baseline for location_id='{location_id}' taskcheck_id={taskcheck_id}"
         )
     return baseline
 
 
-@router.put("/{panel_id}", response_model=BaselineResponse)
+@router.put("/", response_model=BaselineResponse)
 async def update_baseline(
-    panel_id: str,
-    request: BaselineUpdateRequest,
+    request: BaselineCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
     Replace the active baseline for a panel with a new image.
-    
+
     Deactivates the current baseline and creates a new one.
     The old baseline is preserved (is_active=False) for audit history.
     """
     # Find current active baseline
     result = await db.execute(
         select(Baseline).where(
-            Baseline.panel_id == panel_id,
+            Baseline.location_id == request.location_id,
+            Baseline.taskcheck_id == request.taskcheck_id,
             Baseline.is_active == True,
         )
     )
@@ -151,22 +155,20 @@ async def update_baseline(
     # Save enhanced version
     baseline_dir = Path(config.BASELINE_DIR)
     baseline_dir.mkdir(parents=True, exist_ok=True)
-    enhanced_path = str(baseline_dir / f"{request.processing_id}_enhanced.png")
-    color_path = str(baseline_dir / f"{request.processing_id}_color.jpg")
+    file_prefix = f"{request.location_id}_{request.taskcheck_id}"
+    enhanced_path = str(baseline_dir / f"{file_prefix}_enhanced.png")
+    color_path = str(baseline_dir / f"{file_prefix}_color.jpg")
     cv2.imwrite(enhanced_path, enhanced)
     cv2.imwrite(color_path, image)
 
     # Deactivate old baseline
     if current:
         current.is_active = False
-        current.replaced_by = request.processing_id
 
     # Create new baseline
     new_baseline = Baseline(
-        processing_id=request.processing_id,
-        panel_id=panel_id,
-        site_id=current.site_id if current else None,
-        location_id=current.location_id if current else None,
+        location_id=request.location_id,
+        taskcheck_id=request.taskcheck_id,
         image_url=request.image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
@@ -178,6 +180,9 @@ async def update_baseline(
     await db.flush()
     await db.refresh(new_baseline)
 
-    logger.info(f"Baseline replaced: panel={panel_id} old={current.processing_id if current else 'none'} new={request.processing_id}")
+    logger.info(
+        f"Baseline replaced: loc={request.location_id} task={request.taskcheck_id} "
+        f"old_id={current.id if current else 'none'} new_id={new_baseline.id}"
+    )
 
     return new_baseline

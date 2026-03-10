@@ -1,11 +1,13 @@
 """
 Database models for PCD-AI Service.
 baselines (1) → comparisons (N)
+
+Panel identity = location_id + taskcheck_id (unique pair from backend).
 """
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Text,
-    DateTime, ForeignKey, Index
+    DateTime, ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -15,10 +17,8 @@ class Baseline(Base):
     __tablename__ = "ai_baselines"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    processing_id = Column(String(50), unique=True, nullable=False, index=True)
-    panel_id = Column(String(50), nullable=False, index=True)
-    site_id = Column(String(50), nullable=True)
-    location_id = Column(String(50), nullable=True)
+    location_id = Column(String(50), nullable=False, index=True)
+    taskcheck_id = Column(Integer, nullable=False, index=True)
 
     # Image storage
     image_url = Column(Text, nullable=False)
@@ -32,7 +32,6 @@ class Baseline(Base):
 
     # Lifecycle
     is_active = Column(Boolean, default=True)
-    replaced_by = Column(String(50), nullable=True)  # processing_id of replacement
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -40,21 +39,20 @@ class Baseline(Base):
     comparisons = relationship("Comparison", back_populates="baseline", lazy="dynamic")
 
     __table_args__ = (
-        Index("idx_ai_baselines_panel_active", "panel_id", "is_active"),
+        Index("idx_ai_baselines_loc_task_active", "location_id", "taskcheck_id", "is_active"),
+        UniqueConstraint("location_id", "taskcheck_id", "is_active",
+                         name="uq_ai_baselines_active_panel",
+                         sqlite_on_conflict="FAIL"),
     )
 
     def __repr__(self):
-        return f"<Baseline id={self.id} panel={self.panel_id} active={self.is_active}>"
+        return f"<Baseline id={self.id} loc={self.location_id} task={self.taskcheck_id} active={self.is_active}>"
 
 
 class Comparison(Base):
     __tablename__ = "ai_comparisons"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Backend references
-    definition_id = Column(Integer, nullable=True)   # task_check_definition.id
-    execution_id = Column(Integer, nullable=True)     # task_check_execution.id
 
     # Relationships
     baseline_id = Column(Integer, ForeignKey("ai_baselines.id"), nullable=False, index=True)

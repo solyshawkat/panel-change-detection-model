@@ -2,6 +2,7 @@
 --  PCD-AI Service — Database DDL
 --  Panel Change Detection AI Tables
 --  Prefix: ai_
+--  Panel identity = location_id + taskcheck_id
 -- ═══════════════════════════════════════════════════════════════
 
 -- ─── ai_baselines ────────────────────────────────────────────
@@ -10,10 +11,8 @@
 
 CREATE TABLE ai_baselines (
     id                  SERIAL PRIMARY KEY,
-    processing_id       VARCHAR(50) NOT NULL UNIQUE,
-    panel_id            VARCHAR(50) NOT NULL,
-    site_id             VARCHAR(50),
-    location_id         VARCHAR(50),
+    location_id         VARCHAR(50) NOT NULL,
+    taskcheck_id        INTEGER NOT NULL,
 
     -- Image storage
     image_url           TEXT NOT NULL,
@@ -27,15 +26,14 @@ CREATE TABLE ai_baselines (
 
     -- Lifecycle
     is_active           BOOLEAN DEFAULT TRUE,
-    replaced_by         VARCHAR(50),        -- processing_id of replacement baseline
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Indexes
-CREATE INDEX idx_ai_baselines_panel_id ON ai_baselines (panel_id);
-CREATE INDEX idx_ai_baselines_processing_id ON ai_baselines (processing_id);
-CREATE INDEX idx_ai_baselines_panel_active ON ai_baselines (panel_id, is_active);
+CREATE INDEX idx_ai_baselines_location_id ON ai_baselines (location_id);
+CREATE INDEX idx_ai_baselines_taskcheck_id ON ai_baselines (taskcheck_id);
+CREATE INDEX idx_ai_baselines_loc_task_active ON ai_baselines (location_id, taskcheck_id, is_active);
 
 
 -- ─── ai_comparisons ──────────────────────────────────────────
@@ -44,10 +42,6 @@ CREATE INDEX idx_ai_baselines_panel_active ON ai_baselines (panel_id, is_active)
 
 CREATE TABLE ai_comparisons (
     id                  SERIAL PRIMARY KEY,
-
-    -- Backend references
-    definition_id       INTEGER,            -- task_check_definition.id
-    execution_id        INTEGER,            -- task_check_execution.id
 
     -- Relationship
     baseline_id         INTEGER NOT NULL REFERENCES ai_baselines(id),
