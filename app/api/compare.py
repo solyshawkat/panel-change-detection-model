@@ -1,6 +1,8 @@
 """
 Comparison Engine API Routes.
 Runs the full pipeline and returns results.
+
+Returns ratio + similarity_percent. Matching is set by supervisor via feedback.
 """
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -26,18 +28,30 @@ async def create_comparison(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Run a full comparison between a panel's active baseline and a patrol photo.
+    Run a full comparison between a baseline and a patrol photo.
 
-    Panel identity = location_id + taskcheck_id.
+    Looks up baseline by task_location_checks_image_id.
     Pipeline: M0 (QR) -> M1a (Grayscale) + M1b (Color) -> M2 (CLIP) -> M3 (Align) -> M4 (Features) -> M5 (SVM)
 
-    Can stop early at M2 (fraud) or M3 (alignment failure).
+    Returns ratio and similarity_percent. Matching is NOT set here --
+    the supervisor provides that via the feedback API.
     """
-    # Find active baseline for this panel
+    # Check if taskcheck_execution_id already exists
+    existing = await db.execute(
+        select(Comparison).where(
+            Comparison.taskcheck_execution_id == request.taskcheck_execution_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Comparison already exists for taskcheck_execution_id={request.taskcheck_execution_id}"
+        )
+
+    # Find active baseline by task_location_checks_image_id
     result = await db.execute(
         select(Baseline).where(
-            Baseline.location_id == request.location_id,
-            Baseline.taskcheck_id == request.taskcheck_id,
+            Baseline.task_location_checks_image_id == request.task_location_checks_image_id,
             Baseline.is_active == True,
         )
     )
@@ -45,11 +59,12 @@ async def create_comparison(
     if not baseline:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active baseline for location_id='{request.location_id}' taskcheck_id={request.taskcheck_id}. Register one first via POST /baseline"
+            detail=f"No active baseline for task_location_checks_image_id={request.task_location_checks_image_id}. Register one first via POST /baseline"
         )
 
-    # Create comparison record (PENDING)
+    # Create comparison record (PROCESSING)
     comparison = Comparison(
+        taskcheck_execution_id=request.taskcheck_execution_id,
         baseline_id=baseline.id,
         patrol_image_url=request.image_url,
         status="PROCESSING",
@@ -97,7 +112,7 @@ async def create_comparison(
     else:
         baseline_image = baseline_color
 
-    # ── Run Pipeline ──
+    # -- Run Pipeline --
     pipeline = get_pipeline()
     pipeline_result = await pipeline.run(
         baseline_image=baseline_image,
@@ -106,10 +121,10 @@ async def create_comparison(
         baseline_color=baseline_color,
     )
 
-    # ── Update comparison record ──
+    # -- Update comparison record --
     comparison.ratio = pipeline_result.ratio
     comparison.similarity_percent = round((1 - pipeline_result.ratio) * 100, 2) if pipeline_result.ratio is not None else None
-    comparison.matching = pipeline_result.matching
+    # matching is NOT set here -- supervisor sets it via feedback
     comparison.is_valid = pipeline_result.is_valid
     comparison.fraud_score = pipeline_result.fraud_score
 
@@ -150,8 +165,9 @@ async def create_comparison(
 
     logger.info(
         f"Comparison complete: id={comparison.id} "
-        f"loc={request.location_id} task={request.taskcheck_id} "
-        f"ratio={comparison.ratio:.3f} similarity={comparison.similarity_percent:.1f}% matching={comparison.matching} "
+        f"exec_id={request.taskcheck_execution_id} "
+        f"img_id={request.task_location_checks_image_id} "
+        f"ratio={comparison.ratio:.3f} similarity={comparison.similarity_percent:.1f}% "
         f"valid={comparison.is_valid} {comparison.processing_ms}ms"
     )
 
@@ -159,10 +175,10 @@ async def create_comparison(
     response = CompareResponse(
         id=comparison.id,
         baseline_id=comparison.baseline_id,
+        taskcheck_execution_id=comparison.taskcheck_execution_id,
         status=comparison.status,
         ratio=comparison.ratio,
         similarity_percent=comparison.similarity_percent,
-        matching=comparison.matching,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,
         color_shift_detected=(
@@ -197,10 +213,10 @@ async def get_result(
     return CompareDetailResponse(
         id=comparison.id,
         baseline_id=comparison.baseline_id,
+        taskcheck_execution_id=comparison.taskcheck_execution_id,
         status=comparison.status,
         ratio=comparison.ratio,
         similarity_percent=comparison.similarity_percent,
-        matching=comparison.matching,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,
         color_shift_detected=(
@@ -224,8 +240,7 @@ async def get_result(
         alignment_inliers=comparison.alignment_inliers,
         alignment_method=comparison.alignment_method,
         blur_score=comparison.blur_score,
-        supervisor_action=comparison.supervisor_action,
-        supervisor_notes=comparison.supervisor_notes,
+        matching=comparison.matching,
     )
 
 

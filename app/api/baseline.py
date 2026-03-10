@@ -1,15 +1,15 @@
 """
 Baseline Service API Routes.
 Manages baseline reference images for panels.
+
+Baseline identified by task_location_checks_image_id (unique ID from backend).
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
 from app.models.models import Baseline
-from app.schemas.schemas import (
-    BaselineCreateRequest, BaselineUpdateRequest, BaselineResponse
-)
+from app.schemas.schemas import BaselineCreateRequest, BaselineResponse
 from app.utils.image_downloader import get_downloader, ImageDownloadError
 from app.pipeline.runner import get_pipeline
 import logging
@@ -27,24 +27,22 @@ async def create_baseline(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Register a new baseline image for a panel.
+    Register a new baseline image.
 
-    Panel identity = location_id + taskcheck_id.
+    Identified by task_location_checks_image_id (unique from backend).
     Downloads the image, runs quality checks (blur, brightness),
     pre-computes CLAHE enhanced version for faster comparisons.
     """
-    # Check if active baseline already exists for this panel
+    # Check if this baseline image ID already exists
     existing = await db.execute(
         select(Baseline).where(
-            Baseline.location_id == request.location_id,
-            Baseline.taskcheck_id == request.taskcheck_id,
-            Baseline.is_active == True,
+            Baseline.task_location_checks_image_id == request.task_location_checks_image_id,
         )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Active baseline already exists for location_id='{request.location_id}' taskcheck_id={request.taskcheck_id}. Use PUT to replace."
+            detail=f"Baseline already exists for task_location_checks_image_id={request.task_location_checks_image_id}."
         )
 
     # Download image
@@ -64,7 +62,7 @@ async def create_baseline(
     # Save enhanced version to disk for fast comparison later
     baseline_dir = Path(config.BASELINE_DIR)
     baseline_dir.mkdir(parents=True, exist_ok=True)
-    file_prefix = f"{request.location_id}_{request.taskcheck_id}"
+    file_prefix = f"baseline_{request.task_location_checks_image_id}"
     enhanced_path = str(baseline_dir / f"{file_prefix}_enhanced.png")
     color_path = str(baseline_dir / f"{file_prefix}_color.jpg")
     cv2.imwrite(enhanced_path, enhanced)
@@ -72,8 +70,7 @@ async def create_baseline(
 
     # Create database record
     baseline = Baseline(
-        location_id=request.location_id,
-        taskcheck_id=request.taskcheck_id,
+        task_location_checks_image_id=request.task_location_checks_image_id,
         image_url=request.image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
@@ -86,7 +83,7 @@ async def create_baseline(
     await db.refresh(baseline)
 
     logger.info(
-        f"Baseline registered: loc={request.location_id} task={request.taskcheck_id} "
+        f"Baseline registered: img_id={request.task_location_checks_image_id} "
         f"blur={quality['blur']:.1f} brightness={quality['brightness']:.1f} "
         f"warning={quality['warning']}"
     )
@@ -96,15 +93,13 @@ async def create_baseline(
 
 @router.get("/", response_model=BaselineResponse)
 async def get_baseline(
-    location_id: str,
-    taskcheck_id: int,
+    task_location_checks_image_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the active baseline for a panel (location_id + taskcheck_id)."""
+    """Get a baseline by its task_location_checks_image_id."""
     result = await db.execute(
         select(Baseline).where(
-            Baseline.location_id == location_id,
-            Baseline.taskcheck_id == taskcheck_id,
+            Baseline.task_location_checks_image_id == task_location_checks_image_id,
             Baseline.is_active == True,
         )
     )
@@ -112,7 +107,7 @@ async def get_baseline(
     if not baseline:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active baseline for location_id='{location_id}' taskcheck_id={taskcheck_id}"
+            detail=f"No active baseline for task_location_checks_image_id={task_location_checks_image_id}"
         )
     return baseline
 
@@ -123,16 +118,15 @@ async def update_baseline(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Replace the active baseline for a panel with a new image.
+    Replace a baseline image.
 
-    Deactivates the current baseline and creates a new one.
-    The old baseline is preserved (is_active=False) for audit history.
+    Deactivates the current baseline and creates a new one with the same
+    task_location_checks_image_id. Old baseline preserved for audit history.
     """
     # Find current active baseline
     result = await db.execute(
         select(Baseline).where(
-            Baseline.location_id == request.location_id,
-            Baseline.taskcheck_id == request.taskcheck_id,
+            Baseline.task_location_checks_image_id == request.task_location_checks_image_id,
             Baseline.is_active == True,
         )
     )
@@ -155,7 +149,7 @@ async def update_baseline(
     # Save enhanced version
     baseline_dir = Path(config.BASELINE_DIR)
     baseline_dir.mkdir(parents=True, exist_ok=True)
-    file_prefix = f"{request.location_id}_{request.taskcheck_id}"
+    file_prefix = f"baseline_{request.task_location_checks_image_id}"
     enhanced_path = str(baseline_dir / f"{file_prefix}_enhanced.png")
     color_path = str(baseline_dir / f"{file_prefix}_color.jpg")
     cv2.imwrite(enhanced_path, enhanced)
@@ -164,11 +158,12 @@ async def update_baseline(
     # Deactivate old baseline
     if current:
         current.is_active = False
+        # Remove unique constraint conflict by clearing the image_id on old record
+        current.task_location_checks_image_id = -current.id  # negative = deactivated
 
     # Create new baseline
     new_baseline = Baseline(
-        location_id=request.location_id,
-        taskcheck_id=request.taskcheck_id,
+        task_location_checks_image_id=request.task_location_checks_image_id,
         image_url=request.image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
@@ -181,7 +176,7 @@ async def update_baseline(
     await db.refresh(new_baseline)
 
     logger.info(
-        f"Baseline replaced: loc={request.location_id} task={request.taskcheck_id} "
+        f"Baseline replaced: img_id={request.task_location_checks_image_id} "
         f"old_id={current.id if current else 'none'} new_id={new_baseline.id}"
     )
 

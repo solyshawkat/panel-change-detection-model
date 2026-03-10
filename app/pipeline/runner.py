@@ -58,7 +58,6 @@ class PipelineResult:
 
     # M5: Classification
     ratio: float = 0.0
-    matching: bool = True
 
     # Output
     heatmap_path: Optional[str] = None
@@ -205,7 +204,6 @@ class PipelineRunner:
             ]
             classification = self._run_m5_classify(feature_vector)
             result.ratio = classification["probability"]
-            result.matching = classification["probability"] < config.SVM_THRESHOLD
 
             result.success = True
 

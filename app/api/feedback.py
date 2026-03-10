@@ -1,12 +1,18 @@
 """
 Feedback Service API Routes.
-Handles supervisor reviews and tracks model accuracy.
+Supervisor provides matching (true/false) for each comparison.
+
+Feedback contract:
+  - task_location_checks_image_id: baseline image ID
+  - taskcheck_execution_id: comparison execution ID
+  - matching: true = images match (no change), false = change detected
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case
 from app.core.database import get_db
+from app.core import config
 from app.models.models import Baseline, Comparison
 from app.schemas.schemas import (
     FeedbackRequest, FeedbackResponse, AccuracyStats, ServiceStats
@@ -16,8 +22,6 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedback", tags=["Feedback Service"])
 
-VALID_ACTIONS = {"CONFIRM_CHANGE", "REJECT_CHANGE", "CONFIRM_NORMAL"}
-
 
 @router.post("/", response_model=FeedbackResponse)
 async def submit_feedback(
@@ -25,31 +29,34 @@ async def submit_feedback(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Supervisor submits a review for a comparison result.
-    
-    Actions:
-    - CONFIRM_CHANGE: Model said changed, supervisor agrees
-    - REJECT_CHANGE: Model said changed, supervisor says it's normal (false positive)
-    - CONFIRM_NORMAL: Model said normal, supervisor agrees
-    
-    Note: If model said normal but supervisor sees a change, they should
-    use CONFIRM_CHANGE (this becomes a false negative for model tracking).
-    """
-    if request.action not in VALID_ACTIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid action. Must be one of: {', '.join(VALID_ACTIONS)}"
-        )
+    Supervisor says whether the patrol image matches the baseline or not.
 
-    # Find comparison
+    - matching=true  -> images match, no change detected
+    - matching=false -> images differ, change detected
+    """
+    # Find comparison by taskcheck_execution_id
     result = await db.execute(
-        select(Comparison).where(Comparison.id == request.comparison_id)
+        select(Comparison).where(
+            Comparison.taskcheck_execution_id == request.taskcheck_execution_id,
+        )
     )
     comparison = result.scalar_one_or_none()
     if not comparison:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Comparison {request.comparison_id} not found"
+            detail=f"Comparison not found for taskcheck_execution_id={request.taskcheck_execution_id}"
+        )
+
+    # Verify baseline matches
+    baseline = await db.execute(
+        select(Baseline).where(Baseline.id == comparison.baseline_id)
+    )
+    bl = baseline.scalar_one_or_none()
+    if bl and bl.task_location_checks_image_id != request.task_location_checks_image_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"task_location_checks_image_id={request.task_location_checks_image_id} "
+                   f"does not match comparison's baseline (expected {bl.task_location_checks_image_id})"
         )
 
     if comparison.status not in ("COMPLETED", "FRAUD"):
@@ -59,19 +66,20 @@ async def submit_feedback(
         )
 
     # Record feedback
-    comparison.supervisor_action = request.action
-    comparison.supervisor_notes = request.notes
+    comparison.matching = request.matching
     comparison.supervisor_reviewed_at = datetime.utcnow()
     await db.flush()
 
     logger.info(
-        f"Feedback recorded: comparison={request.comparison_id} "
-        f"action={request.action} model_said={'CHANGED' if not comparison.matching else 'NORMAL'}"
+        f"Feedback recorded: exec_id={request.taskcheck_execution_id} "
+        f"img_id={request.task_location_checks_image_id} "
+        f"matching={request.matching}"
     )
 
     return FeedbackResponse(
-        comparison_id=request.comparison_id,
-        action=request.action,
+        task_location_checks_image_id=request.task_location_checks_image_id,
+        taskcheck_execution_id=request.taskcheck_execution_id,
+        matching=request.matching,
         recorded_at=comparison.supervisor_reviewed_at,
         message="Feedback recorded successfully",
     )
@@ -82,33 +90,47 @@ async def get_accuracy(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Calculate model accuracy based on all supervisor feedback.
-    
-    True Positive:  model=CHANGED + supervisor=CONFIRM_CHANGE
-    False Positive: model=CHANGED + supervisor=REJECT_CHANGE  
-    True Negative:  model=NORMAL  + supervisor=CONFIRM_NORMAL
-    False Negative: model=NORMAL  + supervisor=CONFIRM_CHANGE (supervisor overrode)
+    Calculate model accuracy based on supervisor feedback.
+
+    Model prediction derived from ratio vs SVM_THRESHOLD:
+      - ratio >= threshold -> model predicts CHANGED
+      - ratio <  threshold -> model predicts NORMAL (matching)
+
+    Supervisor verdict:
+      - matching=false -> supervisor says CHANGED
+      - matching=true  -> supervisor says NORMAL
+
+    TP: model=CHANGED + supervisor=CHANGED (matching=false)
+    FP: model=CHANGED + supervisor=NORMAL  (matching=true)
+    TN: model=NORMAL  + supervisor=NORMAL  (matching=true)
+    FN: model=NORMAL  + supervisor=CHANGED (matching=false)
     """
+    threshold = getattr(config, "SVM_THRESHOLD", 0.389)
+
     result = await db.execute(
         select(
             func.count().label("total"),
+            # TP: model predicted change (ratio >= threshold) AND supervisor confirmed change (matching=false)
             func.sum(case(
-                (and_(Comparison.matching == False, Comparison.supervisor_action == "CONFIRM_CHANGE"), 1),
+                (and_(Comparison.ratio >= threshold, Comparison.matching == False), 1),
                 else_=0
             )).label("tp"),
+            # FP: model predicted change (ratio >= threshold) AND supervisor said matching (matching=true)
             func.sum(case(
-                (and_(Comparison.matching == False, Comparison.supervisor_action == "REJECT_CHANGE"), 1),
+                (and_(Comparison.ratio >= threshold, Comparison.matching == True), 1),
                 else_=0
             )).label("fp"),
+            # TN: model predicted normal (ratio < threshold) AND supervisor confirmed matching (matching=true)
             func.sum(case(
-                (and_(Comparison.matching == True, Comparison.supervisor_action == "CONFIRM_NORMAL"), 1),
+                (and_(Comparison.ratio < threshold, Comparison.matching == True), 1),
                 else_=0
             )).label("tn"),
+            # FN: model predicted normal (ratio < threshold) AND supervisor found change (matching=false)
             func.sum(case(
-                (and_(Comparison.matching == True, Comparison.supervisor_action == "CONFIRM_CHANGE"), 1),
+                (and_(Comparison.ratio < threshold, Comparison.matching == False), 1),
                 else_=0
             )).label("fn"),
-        ).where(Comparison.supervisor_action.isnot(None))
+        ).where(Comparison.matching.isnot(None))
     )
     row = result.one()
 
@@ -161,7 +183,7 @@ async def get_stats(
             func.sum(case(
                 (and_(
                     Comparison.status == "COMPLETED",
-                    Comparison.supervisor_action.is_(None)
+                    Comparison.matching.is_(None)
                 ), 1),
                 else_=0
             )).label("pending"),

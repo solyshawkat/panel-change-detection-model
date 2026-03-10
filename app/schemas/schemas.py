@@ -1,6 +1,11 @@
 """
 Pydantic schemas for API request/response validation.
 Organized by service: Baseline, Comparison, Feedback.
+
+Backend contract:
+  - Baseline identifies by: task_location_checks_image_id
+  - Comparison identifies by: taskcheck_execution_id + task_location_checks_image_id
+  - Feedback: supervisor sets matching (true/false)
 """
 from datetime import datetime
 from pydantic import BaseModel, Field, HttpUrl
@@ -13,26 +18,13 @@ from typing import Optional
 
 class BaselineCreateRequest(BaseModel):
     """POST /baseline - Register a new baseline image."""
-    location_id: str = Field(..., description="Location identifier", max_length=50)
-    taskcheck_id: int = Field(..., description="Task check ID (location_id + taskcheck_id = unique panel)")
+    task_location_checks_image_id: int = Field(..., description="Unique ID of the baseline image (from backend)")
     image_url: str = Field(..., description="URL to download the baseline image")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "location_id": "LOC-FLOOR3",
-            "taskcheck_id": 1001,
+            "task_location_checks_image_id": 5001,
             "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_001.jpg"
-        }
-    }}
-
-
-class BaselineUpdateRequest(BaseModel):
-    """PUT /baseline - Replace baseline with new image."""
-    image_url: str = Field(..., description="URL to the new baseline image")
-
-    model_config = {"json_schema_extra": {
-        "example": {
-            "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_002.jpg"
         }
     }}
 
@@ -40,8 +32,7 @@ class BaselineUpdateRequest(BaseModel):
 class BaselineResponse(BaseModel):
     """Response after baseline registration."""
     id: int
-    location_id: str
-    taskcheck_id: int
+    task_location_checks_image_id: int
     is_active: bool
     blur_score: Optional[float] = None
     brightness: Optional[float] = None
@@ -57,27 +48,27 @@ class BaselineResponse(BaseModel):
 
 class CompareRequest(BaseModel):
     """POST /compare - Request a comparison between baseline and patrol image."""
-    location_id: str = Field(..., description="Location identifier")
-    taskcheck_id: int = Field(..., description="Task check ID (looks up active baseline)")
+    taskcheck_execution_id: int = Field(..., description="Comparison image unique ID (from backend)")
+    task_location_checks_image_id: int = Field(..., description="Unique ID of the baseline image (looks up baseline)")
     image_url: str = Field(..., description="URL to download the patrol image")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "location_id": "LOC-FLOOR3",
-            "taskcheck_id": 1001,
+            "taskcheck_execution_id": 9001,
+            "task_location_checks_image_id": 5001,
             "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/patrol_5023.jpg"
         }
     }}
 
 
 class CompareResponse(BaseModel):
-    """Response after comparison completes."""
+    """Response after comparison completes. Supervisor sets matching via feedback."""
     id: int
     baseline_id: int
+    taskcheck_execution_id: int
     status: str
     ratio: Optional[float] = None
     similarity_percent: Optional[float] = None
-    matching: Optional[bool] = None
     is_valid: Optional[bool] = None
     fraud_score: Optional[float] = None
     color_shift_detected: Optional[bool] = None
@@ -108,9 +99,8 @@ class CompareDetailResponse(CompareResponse):
     alignment_method: Optional[str] = None
     # Quality
     blur_score: Optional[float] = None
-    # Feedback
-    supervisor_action: Optional[str] = None
-    supervisor_notes: Optional[str] = None
+    # Supervisor feedback
+    matching: Optional[bool] = None
 
     model_config = {"from_attributes": True}
 
@@ -120,24 +110,25 @@ class CompareDetailResponse(CompareResponse):
 # ═══════════════════════════════════════════
 
 class FeedbackRequest(BaseModel):
-    """POST /feedback - Supervisor submits a review."""
-    comparison_id: int = Field(..., description="Comparison to review")
-    action: str = Field(..., description="CONFIRM_CHANGE | REJECT_CHANGE | CONFIRM_NORMAL")
-    notes: Optional[str] = Field(None, description="Optional supervisor notes")
+    """POST /feedback - Supervisor says whether images match or not."""
+    task_location_checks_image_id: int = Field(..., description="Baseline image ID")
+    taskcheck_execution_id: int = Field(..., description="Comparison execution ID")
+    matching: bool = Field(..., description="true = images match (no change), false = images differ (change detected)")
 
     model_config = {"json_schema_extra": {
         "example": {
-            "comparison_id": 42,
-            "action": "CONFIRM_CHANGE",
-            "notes": "Switch 3 in row B was flipped"
+            "task_location_checks_image_id": 5001,
+            "taskcheck_execution_id": 9001,
+            "matching": False
         }
     }}
 
 
 class FeedbackResponse(BaseModel):
     """Response after feedback is recorded."""
-    comparison_id: int
-    action: str
+    task_location_checks_image_id: int
+    taskcheck_execution_id: int
+    matching: bool
     recorded_at: datetime
     message: str
 
@@ -145,10 +136,10 @@ class FeedbackResponse(BaseModel):
 class AccuracyStats(BaseModel):
     """GET /accuracy - Model accuracy based on supervisor feedback."""
     total_reviewed: int
-    true_positives: int   # model said CHANGED, supervisor confirmed
-    false_positives: int  # model said CHANGED, supervisor rejected
-    true_negatives: int   # model said NORMAL, supervisor confirmed
-    false_negatives: int  # model said NORMAL, supervisor said it changed
+    true_positives: int   # model predicted change, supervisor confirmed (matching=false)
+    false_positives: int  # model predicted change, supervisor said matching (matching=true)
+    true_negatives: int   # model predicted normal, supervisor confirmed (matching=true)
+    false_negatives: int  # model predicted normal, supervisor found change (matching=false)
     accuracy: Optional[float] = None
     precision: Optional[float] = None
     recall: Optional[float] = None
