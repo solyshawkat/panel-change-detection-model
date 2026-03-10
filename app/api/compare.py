@@ -27,15 +27,17 @@ async def create_comparison(
 ):
     """
     Run a full comparison between a panel's active baseline and a patrol photo.
-    
-    Pipeline: M0 (QR) → M1a (Grayscale) + M1b (Color) → M2 (CLIP) → M3 (Align) → M4 (Features) → M5 (SVM)
-    
+
+    Panel identity = location_id + taskcheck_id.
+    Pipeline: M0 (QR) -> M1a (Grayscale) + M1b (Color) -> M2 (CLIP) -> M3 (Align) -> M4 (Features) -> M5 (SVM)
+
     Can stop early at M2 (fraud) or M3 (alignment failure).
     """
     # Find active baseline for this panel
     result = await db.execute(
         select(Baseline).where(
-            Baseline.panel_id == request.panel_id,
+            Baseline.location_id == request.location_id,
+            Baseline.taskcheck_id == request.taskcheck_id,
             Baseline.is_active == True,
         )
     )
@@ -43,15 +45,13 @@ async def create_comparison(
     if not baseline:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active baseline for panel '{request.panel_id}'. Register one first via POST /baseline"
+            detail=f"No active baseline for location_id='{request.location_id}' taskcheck_id={request.taskcheck_id}. Register one first via POST /baseline"
         )
 
     # Create comparison record (PENDING)
     comparison = Comparison(
-        definition_id=request.definition_id,
-        execution_id=request.execution_id,
         baseline_id=baseline.id,
-        patrol_image_url=request.patrol_image_url,
+        patrol_image_url=request.image_url,
         status="PROCESSING",
     )
     db.add(comparison)
@@ -60,7 +60,7 @@ async def create_comparison(
     # Download patrol image
     try:
         downloader = get_downloader()
-        patrol_image = await downloader.download(request.patrol_image_url)
+        patrol_image = await downloader.download(request.image_url)
     except ImageDownloadError as e:
         comparison.status = "FAILED"
         comparison.error_message = f"Image download failed: {str(e)}"
@@ -148,7 +148,8 @@ async def create_comparison(
     await db.refresh(comparison)
 
     logger.info(
-        f"Comparison complete: id={comparison.id} panel={request.panel_id} "
+        f"Comparison complete: id={comparison.id} "
+        f"loc={request.location_id} task={request.taskcheck_id} "
         f"ratio={comparison.ratio:.3f} matching={comparison.matching} "
         f"valid={comparison.is_valid} {comparison.processing_ms}ms"
     )
