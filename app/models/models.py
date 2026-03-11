@@ -57,8 +57,7 @@ class Comparison(Base):
     patrol_image_url = Column(Text, nullable=False)
 
     # -- Results --
-    ratio = Column(Float, nullable=True)                # SVM probability (change %)
-    similarity_percent = Column(Float, nullable=True)   # (1 - ratio) * 100
+    difference_percent = Column(Float, default=0)        # ratio * 100 (% change). 0 if CLIP fraud.
     matching = Column(Boolean, nullable=True)            # Set by supervisor via feedback, NOT pipeline
     status = Column(String(30), default="PENDING")       # PENDING | PROCESSING | COMPLETED | FAILED | FRAUD
 

@@ -92,9 +92,9 @@ async def get_accuracy(
     """
     Calculate model accuracy based on supervisor feedback.
 
-    Model prediction derived from ratio vs SVM_THRESHOLD:
-      - ratio >= threshold -> model predicts CHANGED
-      - ratio <  threshold -> model predicts NORMAL (matching)
+    Model prediction derived from difference_percent vs threshold:
+      - difference_percent >= threshold_pct -> model predicts CHANGED
+      - difference_percent <  threshold_pct -> model predicts NORMAL (matching)
 
     Supervisor verdict:
       - matching=false -> supervisor says CHANGED
@@ -105,29 +105,29 @@ async def get_accuracy(
     TN: model=NORMAL  + supervisor=NORMAL  (matching=true)
     FN: model=NORMAL  + supervisor=CHANGED (matching=false)
     """
-    threshold = getattr(config, "SVM_THRESHOLD", 0.389)
+    threshold_pct = getattr(config, "SVM_THRESHOLD", 0.389) * 100  # convert to percentage
 
     result = await db.execute(
         select(
             func.count().label("total"),
-            # TP: model predicted change (ratio >= threshold) AND supervisor confirmed change (matching=false)
+            # TP: model predicted change (diff >= threshold) AND supervisor confirmed change (matching=false)
             func.sum(case(
-                (and_(Comparison.ratio >= threshold, Comparison.matching == False), 1),
+                (and_(Comparison.difference_percent >= threshold_pct, Comparison.matching == False), 1),
                 else_=0
             )).label("tp"),
-            # FP: model predicted change (ratio >= threshold) AND supervisor said matching (matching=true)
+            # FP: model predicted change (diff >= threshold) AND supervisor said matching (matching=true)
             func.sum(case(
-                (and_(Comparison.ratio >= threshold, Comparison.matching == True), 1),
+                (and_(Comparison.difference_percent >= threshold_pct, Comparison.matching == True), 1),
                 else_=0
             )).label("fp"),
-            # TN: model predicted normal (ratio < threshold) AND supervisor confirmed matching (matching=true)
+            # TN: model predicted normal (diff < threshold) AND supervisor confirmed matching (matching=true)
             func.sum(case(
-                (and_(Comparison.ratio < threshold, Comparison.matching == True), 1),
+                (and_(Comparison.difference_percent < threshold_pct, Comparison.matching == True), 1),
                 else_=0
             )).label("tn"),
-            # FN: model predicted normal (ratio < threshold) AND supervisor found change (matching=false)
+            # FN: model predicted normal (diff < threshold) AND supervisor found change (matching=false)
             func.sum(case(
-                (and_(Comparison.ratio < threshold, Comparison.matching == False), 1),
+                (and_(Comparison.difference_percent < threshold_pct, Comparison.matching == False), 1),
                 else_=0
             )).label("fn"),
         ).where(Comparison.matching.isnot(None))

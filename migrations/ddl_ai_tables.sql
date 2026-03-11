@@ -51,8 +51,7 @@ CREATE TABLE ai_comparisons (
     patrol_image_url        TEXT NOT NULL,
 
     -- Results
-    ratio                   FLOAT,              -- SVM probability (change %)
-    similarity_percent      FLOAT,              -- (1 - ratio) * 100
+    difference_percent      FLOAT DEFAULT 0,    -- ratio * 100 (% change). 0 if CLIP fraud.
     matching                BOOLEAN,            -- Set by supervisor via feedback, NOT pipeline
     status                  VARCHAR(30) DEFAULT 'PENDING',
                                                 -- PENDING | PROCESSING | COMPLETED | FAILED | FRAUD

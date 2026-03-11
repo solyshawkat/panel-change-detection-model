@@ -67,8 +67,7 @@ class CompareResponse(BaseModel):
     baseline_id: int
     taskcheck_execution_id: int
     status: str
-    ratio: Optional[float] = None
-    similarity_percent: Optional[float] = None
+    difference_percent: float = 0
     is_valid: Optional[bool] = None
     fraud_score: Optional[float] = None
     color_shift_detected: Optional[bool] = None
