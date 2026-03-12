@@ -235,6 +235,14 @@ class PipelineRunner:
             patrol_warped = alignment_result["warped"]
             warp_mask = alignment_result["mask"]
 
+            # Ensure patrol_warped matches baseline dimensions (safety resize)
+            bh, bw = baseline_enhanced.shape[:2]
+            if patrol_warped.shape[:2] != (bh, bw):
+                logger.debug(f"Size mismatch: baseline={bh}x{bw}, warped={patrol_warped.shape[0]}x{patrol_warped.shape[1]}. Resizing.")
+                patrol_warped = cv2.resize(patrol_warped, (bw, bh))
+                if warp_mask is not None:
+                    warp_mask = cv2.resize(warp_mask, (bw, bh))
+
             # ── M4: Feature Extraction ──
             logger.debug("M4: Feature Extraction (9 signals)")
 
