@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/compare", tags=["Comparison Engine"])
 
 
-@router.post("/", response_model=CompareResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CompareResponse, status_code=status.HTTP_201_CREATED)
 async def create_comparison(
     request: CompareRequest,
     db: AsyncSession = Depends(get_db),
