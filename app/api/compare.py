@@ -36,16 +36,16 @@ async def create_comparison(
     Returns difference_percent (% change between images, 0 if CLIP fraud).
     Matching is NOT set here -- the supervisor provides that via the feedback API.
     """
-    # Check if taskcheck_execution_id already exists
+    # Check if task_check_execution_id already exists
     existing = await db.execute(
         select(Comparison).where(
-            Comparison.taskcheck_execution_id == request.taskcheck_execution_id,
+            Comparison.task_check_execution_id == request.task_check_execution_id,
         )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Comparison already exists for taskcheck_execution_id={request.taskcheck_execution_id}"
+            detail=f"Comparison already exists for task_check_execution_id={request.task_check_execution_id}"
         )
 
     # Find active baseline by task_location_checks_image_id
@@ -64,26 +64,26 @@ async def create_comparison(
 
     # Create comparison record (PROCESSING)
     comparison = Comparison(
-        taskcheck_execution_id=request.taskcheck_execution_id,
+        task_check_execution_id=request.task_check_execution_id,
         baseline_id=baseline.id,
-        patrol_image_url=request.image_url,
+        evidence_image_path=request.evidence_image_path,
         status="PROCESSING",
     )
     db.add(comparison)
     await db.flush()
 
-    # Download patrol image
+    # Download evidence (patrol) image
     try:
         downloader = get_downloader()
-        patrol_image = await downloader.download(request.image_url)
+        patrol_image = await downloader.download(request.evidence_image_path)
     except ImageDownloadError as e:
         comparison.status = "FAILED"
-        comparison.error_message = f"Image download failed: {str(e)}"
+        comparison.error_message = f"Evidence image download failed: {str(e)}"
         await db.flush()
         await db.refresh(comparison)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to download patrol image: {str(e)}"
+            detail=f"Failed to download evidence image: {str(e)}"
         )
 
     # Load cached baseline (enhanced + color)
@@ -94,10 +94,10 @@ async def create_comparison(
     if baseline.color_cache_path and Path(baseline.color_cache_path).exists():
         baseline_color = cv2.imread(baseline.color_cache_path)
 
-    # If no cache, download baseline image
+    # If no cache, use reference_image_path from request as fallback
     if baseline_enhanced is None or baseline_color is None:
         try:
-            baseline_image = await downloader.download(baseline.image_url)
+            baseline_image = await downloader.download(request.reference_image_path)
             if baseline_color is None:
                 baseline_color = baseline_image
         except ImageDownloadError as e:
@@ -122,11 +122,11 @@ async def create_comparison(
     )
 
     # -- Update comparison record --
-    # difference_percent = ratio * 100. If CLIP flagged fraud, set to 0.
+    # ratio = SVM probability * 100 (percentage). If CLIP flagged fraud, set to 0.
     if not pipeline_result.is_valid:
-        comparison.difference_percent = 0
+        comparison.ratio = 0
     else:
-        comparison.difference_percent = round(pipeline_result.ratio * 100, 2)
+        comparison.ratio = round(pipeline_result.ratio * 100, 2)
     # matching is NOT set here -- supervisor sets it via feedback
     comparison.is_valid = pipeline_result.is_valid
     comparison.fraud_score = pipeline_result.fraud_score
@@ -168,9 +168,9 @@ async def create_comparison(
 
     logger.info(
         f"Comparison complete: id={comparison.id} "
-        f"exec_id={request.taskcheck_execution_id} "
+        f"exec_id={request.task_check_execution_id} "
         f"img_id={request.task_location_checks_image_id} "
-        f"difference={comparison.difference_percent:.1f}% "
+        f"ratio={comparison.ratio:.1f}% "
         f"valid={comparison.is_valid} {comparison.processing_ms}ms"
     )
 
@@ -178,9 +178,9 @@ async def create_comparison(
     response = CompareResponse(
         id=comparison.id,
         baseline_id=comparison.baseline_id,
-        taskcheck_execution_id=comparison.taskcheck_execution_id,
+        task_check_execution_id=comparison.task_check_execution_id,
         status=comparison.status,
-        difference_percent=comparison.difference_percent,
+        ratio=comparison.ratio,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,
         color_shift_detected=(
@@ -215,9 +215,9 @@ async def get_result(
     return CompareDetailResponse(
         id=comparison.id,
         baseline_id=comparison.baseline_id,
-        taskcheck_execution_id=comparison.taskcheck_execution_id,
+        task_check_execution_id=comparison.task_check_execution_id,
         status=comparison.status,
-        difference_percent=comparison.difference_percent,
+        ratio=comparison.ratio,
         is_valid=comparison.is_valid,
         fraud_score=comparison.fraud_score,
         color_shift_detected=(

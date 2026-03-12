@@ -48,7 +48,7 @@ async def create_baseline(
     # Download image
     try:
         downloader = get_downloader()
-        image = await downloader.download(request.image_url)
+        image = await downloader.download(request.reference_image_url)
     except ImageDownloadError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -71,7 +71,7 @@ async def create_baseline(
     # Create database record
     baseline = Baseline(
         task_location_checks_image_id=request.task_location_checks_image_id,
-        image_url=request.image_url,
+        image_url=request.reference_image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
         blur_score=quality["blur"],
@@ -135,7 +135,7 @@ async def update_baseline(
     # Download new image
     try:
         downloader = get_downloader()
-        image = await downloader.download(request.image_url)
+        image = await downloader.download(request.reference_image_url)
     except ImageDownloadError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -164,7 +164,7 @@ async def update_baseline(
     # Create new baseline
     new_baseline = Baseline(
         task_location_checks_image_id=request.task_location_checks_image_id,
-        image_url=request.image_url,
+        image_url=request.reference_image_url,
         enhanced_cache_path=enhanced_path,
         color_cache_path=color_path,
         blur_score=quality["blur"],

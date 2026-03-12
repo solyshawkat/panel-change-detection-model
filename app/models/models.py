@@ -3,7 +3,7 @@ Database models for PCD-AI Service.
 baselines (1) -> comparisons (N)
 
 Baseline identified by: task_location_checks_image_id (unique ID from backend).
-Comparison identified by: taskcheck_execution_id (unique ID from backend).
+Comparison identified by: task_check_execution_id (unique ID from backend).
 Matching (true/false) is set by supervisor via feedback, NOT by the pipeline.
 """
 from datetime import datetime
@@ -47,17 +47,17 @@ class Comparison(Base):
     __tablename__ = "ai_comparisons"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    taskcheck_execution_id = Column(Integer, nullable=False, unique=True, index=True)
+    task_check_execution_id = Column(Integer, nullable=False, unique=True, index=True)
 
     # Relationships
     baseline_id = Column(Integer, ForeignKey("ai_baselines.id"), nullable=False, index=True)
     baseline = relationship("Baseline", back_populates="comparisons")
 
     # Input
-    patrol_image_url = Column(Text, nullable=False)
+    evidence_image_path = Column(Text, nullable=False)              # Patrol/evidence image URL
 
     # -- Results --
-    difference_percent = Column(Float, default=0)        # ratio * 100 (% change). 0 if CLIP fraud.
+    ratio = Column(Float, default=0)                      # SVM probability * 100 (% change). 0 if CLIP fraud.
     matching = Column(Boolean, nullable=True)            # Set by supervisor via feedback, NOT pipeline
     status = Column(String(30), default="PENDING")       # PENDING | PROCESSING | COMPLETED | FAILED | FRAUD
 
@@ -101,4 +101,4 @@ class Comparison(Base):
     )
 
     def __repr__(self):
-        return f"<Comparison id={self.id} exec={self.taskcheck_execution_id} status={self.status}>"
+        return f"<Comparison id={self.id} exec={self.task_check_execution_id} status={self.status}>"
