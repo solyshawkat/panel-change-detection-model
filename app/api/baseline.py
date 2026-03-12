@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/baseline", tags=["Baseline Service"])
 
 
-@router.post("/", response_model=BaselineResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BaselineResponse, status_code=status.HTTP_201_CREATED)
 async def create_baseline(
     request: BaselineCreateRequest,
     db: AsyncSession = Depends(get_db),
@@ -91,7 +91,7 @@ async def create_baseline(
     return baseline
 
 
-@router.get("/", response_model=BaselineResponse)
+@router.get("", response_model=BaselineResponse)
 async def get_baseline(
     task_location_checks_image_id: int,
     db: AsyncSession = Depends(get_db),
@@ -112,7 +112,7 @@ async def get_baseline(
     return baseline
 
 
-@router.put("/", response_model=BaselineResponse)
+@router.put("", response_model=BaselineResponse)
 async def update_baseline(
     request: BaselineCreateRequest,
     db: AsyncSession = Depends(get_db),

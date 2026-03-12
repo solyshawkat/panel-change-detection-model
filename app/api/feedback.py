@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedback", tags=["Feedback Service"])
 
 
-@router.post("/", response_model=FeedbackResponse)
+@router.post("", response_model=FeedbackResponse)
 async def submit_feedback(
     request: FeedbackRequest,
     db: AsyncSession = Depends(get_db),
