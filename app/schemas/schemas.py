@@ -2,13 +2,13 @@
 Pydantic schemas for API request/response validation.
 Organized by service: Baseline, Comparison, Feedback.
 
-Backend contract:
-  - Baseline identifies by: task_location_checks_image_id
-  - Comparison identifies by: taskcheck_execution_id + task_location_checks_image_id
-  - Feedback: supervisor sets matching (true/false)
+Backend contract (Java sends camelCase):
+  - Baseline: ReferenceImageUploadedRequest
+  - Compare: ImageComparisonRequest
+  - Feedback: MatchingFeedbackRequest
 """
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 
 
@@ -17,16 +17,17 @@ from typing import Optional
 # ═══════════════════════════════════════════
 
 class BaselineCreateRequest(BaseModel):
-    """POST /baseline - Register a new baseline image."""
-    task_location_checks_image_id: int = Field(..., description="Unique ID of the baseline image (from backend)")
-    image_url: str = Field(..., description="URL to download the baseline image")
+    """POST /baseline - Register a new baseline image.
+    Maps to Java: ReferenceImageUploadedRequest"""
+    task_location_checks_image_id: int = Field(..., alias="taskLocationChecksImageId", description="Unique ID of the baseline image")
+    reference_image_url: str = Field(..., alias="referenceImageUrl", description="URL to download the baseline image")
 
-    model_config = {"json_schema_extra": {
+    model_config = ConfigDict(populate_by_name=True, json_schema_extra={
         "example": {
-            "task_location_checks_image_id": 5001,
-            "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_001.jpg"
+            "taskLocationChecksImageId": 5001,
+            "referenceImageUrl": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/baseline_001.jpg"
         }
-    }}
+    })
 
 
 class BaselineResponse(BaseModel):
@@ -47,27 +48,30 @@ class BaselineResponse(BaseModel):
 # ═══════════════════════════════════════════
 
 class CompareRequest(BaseModel):
-    """POST /compare - Request a comparison between baseline and patrol image."""
-    taskcheck_execution_id: int = Field(..., description="Comparison image unique ID (from backend)")
-    task_location_checks_image_id: int = Field(..., description="Unique ID of the baseline image (looks up baseline)")
-    image_url: str = Field(..., description="URL to download the patrol image")
+    """POST /compare - Request a comparison between baseline and patrol image.
+    Maps to Java: ImageComparisonRequest"""
+    task_check_execution_id: int = Field(..., alias="taskCheckExecutionId", description="Comparison image unique ID")
+    task_location_checks_image_id: int = Field(..., alias="taskLocationChecksImageId", description="Baseline image ID (looks up baseline)")
+    reference_image_path: str = Field(..., alias="referenceImagePath", description="Baseline image URL (fallback if cache missing)")
+    evidence_image_path: str = Field(..., alias="evidenceImagePath", description="Patrol/evidence image URL to compare")
 
-    model_config = {"json_schema_extra": {
+    model_config = ConfigDict(populate_by_name=True, json_schema_extra={
         "example": {
-            "taskcheck_execution_id": 9001,
-            "task_location_checks_image_id": 5001,
-            "image_url": "https://objectstorage.me-jeddah-1.oraclecloud.com/n/namespace/b/bucket/o/patrol_5023.jpg"
+            "taskCheckExecutionId": 9001,
+            "taskLocationChecksImageId": 5001,
+            "referenceImagePath": "https://objectstorage.../baseline_001.jpg",
+            "evidenceImagePath": "https://objectstorage.../patrol_5023.jpg"
         }
-    }}
+    })
 
 
 class CompareResponse(BaseModel):
     """Response after comparison completes. Supervisor sets matching via feedback."""
     id: int
     baseline_id: int
-    taskcheck_execution_id: int
+    task_check_execution_id: int
     status: str
-    difference_percent: float = 0
+    ratio: float = 0
     is_valid: Optional[bool] = None
     fraud_score: Optional[float] = None
     color_shift_detected: Optional[bool] = None
@@ -109,24 +113,25 @@ class CompareDetailResponse(CompareResponse):
 # ═══════════════════════════════════════════
 
 class FeedbackRequest(BaseModel):
-    """POST /feedback - Supervisor says whether images match or not."""
-    task_location_checks_image_id: int = Field(..., description="Baseline image ID")
-    taskcheck_execution_id: int = Field(..., description="Comparison execution ID")
+    """POST /feedback - Supervisor says whether images match or not.
+    Maps to Java: MatchingFeedbackRequest"""
+    task_check_execution_id: int = Field(..., alias="taskCheckExecutionId", description="Comparison execution ID")
+    task_location_checks_image_id: int = Field(..., alias="taskLocationChecksImageId", description="Baseline image ID")
     matching: bool = Field(..., description="true = images match (no change), false = images differ (change detected)")
 
-    model_config = {"json_schema_extra": {
+    model_config = ConfigDict(populate_by_name=True, json_schema_extra={
         "example": {
-            "task_location_checks_image_id": 5001,
-            "taskcheck_execution_id": 9001,
+            "taskCheckExecutionId": 9001,
+            "taskLocationChecksImageId": 5001,
             "matching": False
         }
-    }}
+    })
 
 
 class FeedbackResponse(BaseModel):
     """Response after feedback is recorded."""
     task_location_checks_image_id: int
-    taskcheck_execution_id: int
+    task_check_execution_id: int
     matching: bool
     recorded_at: datetime
     message: str

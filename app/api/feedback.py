@@ -37,14 +37,14 @@ async def submit_feedback(
     # Find comparison by taskcheck_execution_id
     result = await db.execute(
         select(Comparison).where(
-            Comparison.taskcheck_execution_id == request.taskcheck_execution_id,
+            Comparison.task_check_execution_id == request.task_check_execution_id,
         )
     )
     comparison = result.scalar_one_or_none()
     if not comparison:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Comparison not found for taskcheck_execution_id={request.taskcheck_execution_id}"
+            detail=f"Comparison not found for taskcheck_execution_id={request.task_check_execution_id}"
         )
 
     # Verify baseline matches
@@ -71,14 +71,14 @@ async def submit_feedback(
     await db.flush()
 
     logger.info(
-        f"Feedback recorded: exec_id={request.taskcheck_execution_id} "
+        f"Feedback recorded: exec_id={request.task_check_execution_id} "
         f"img_id={request.task_location_checks_image_id} "
         f"matching={request.matching}"
     )
 
     return FeedbackResponse(
         task_location_checks_image_id=request.task_location_checks_image_id,
-        taskcheck_execution_id=request.taskcheck_execution_id,
+        task_check_execution_id=request.task_check_execution_id,
         matching=request.matching,
         recorded_at=comparison.supervisor_reviewed_at,
         message="Feedback recorded successfully",
@@ -92,9 +92,9 @@ async def get_accuracy(
     """
     Calculate model accuracy based on supervisor feedback.
 
-    Model prediction derived from difference_percent vs threshold:
-      - difference_percent >= threshold_pct -> model predicts CHANGED
-      - difference_percent <  threshold_pct -> model predicts NORMAL (matching)
+    Model prediction derived from ratio vs threshold:
+      - ratio >= threshold_pct -> model predicts CHANGED
+      - ratio <  threshold_pct -> model predicts NORMAL (matching)
 
     Supervisor verdict:
       - matching=false -> supervisor says CHANGED
@@ -112,22 +112,22 @@ async def get_accuracy(
             func.count().label("total"),
             # TP: model predicted change (diff >= threshold) AND supervisor confirmed change (matching=false)
             func.sum(case(
-                (and_(Comparison.difference_percent >= threshold_pct, Comparison.matching == False), 1),
+                (and_(Comparison.ratio >= threshold_pct, Comparison.matching == False), 1),
                 else_=0
             )).label("tp"),
             # FP: model predicted change (diff >= threshold) AND supervisor said matching (matching=true)
             func.sum(case(
-                (and_(Comparison.difference_percent >= threshold_pct, Comparison.matching == True), 1),
+                (and_(Comparison.ratio >= threshold_pct, Comparison.matching == True), 1),
                 else_=0
             )).label("fp"),
             # TN: model predicted normal (diff < threshold) AND supervisor confirmed matching (matching=true)
             func.sum(case(
-                (and_(Comparison.difference_percent < threshold_pct, Comparison.matching == True), 1),
+                (and_(Comparison.ratio < threshold_pct, Comparison.matching == True), 1),
                 else_=0
             )).label("tn"),
             # FN: model predicted normal (diff < threshold) AND supervisor found change (matching=false)
             func.sum(case(
-                (and_(Comparison.difference_percent < threshold_pct, Comparison.matching == False), 1),
+                (and_(Comparison.ratio < threshold_pct, Comparison.matching == False), 1),
                 else_=0
             )).label("fn"),
         ).where(Comparison.matching.isnot(None))
