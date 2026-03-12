@@ -74,7 +74,7 @@ class ImageDownloader:
         """
         headers = {}
 
-        if config.ORACLE_CLOUD_ENABLED and "oraclecloud.com" in url:
+        if config.ORACLE_CLOUD["enabled"] and "oraclecloud.com" in url:
             # If it's a PAR URL, no auth needed
             if "/p/" in url:
                 logger.debug("Oracle Cloud PAR URL detected, no auth needed")
