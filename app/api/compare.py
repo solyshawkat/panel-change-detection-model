@@ -122,9 +122,10 @@ async def create_comparison(
     )
 
     # -- Update comparison record --
-    # ratio = SVM probability * 100 (percentage). If CLIP flagged fraud, set to 0.
-    if not pipeline_result.is_valid:
-        comparison.ratio = 0
+    # ratio = SVM probability * 100 (percentage).
+    # If CLIP fraud or pipeline failed, return 100 (max difference) to flag for supervisor review.
+    if not pipeline_result.is_valid or not pipeline_result.success:
+        comparison.ratio = 100
     else:
         comparison.ratio = round(pipeline_result.ratio * 100, 2)
     # matching is NOT set here -- supervisor sets it via feedback
