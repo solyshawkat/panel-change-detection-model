@@ -285,10 +285,37 @@ class PipelineRunner:
             )
             result.heatmap_path = heatmap_path
 
-            # ── M5: SVM Classification ──
-            logger.debug("M5: SVM Classification")
-            classification = self._run_m5_classify(structure_features)
-            result.ratio = classification["probability"]
+            # ── M5: Direct Pixel Difference ──
+            # Weighted combination of raw M4 metrics (all 0-1 range).
+            # Replaces SVM which was trained on only 46 samples and
+            # distorted results (e.g. identical images → 39%).
+            # SVM code kept in _run_m5_classify() for future retraining.
+            logger.debug("M5: Direct Pixel Difference")
+            ssim = structure_features["ssim"]
+            edge = structure_features["edge"]
+            hist = structure_features["histogram"]
+            cluster = structure_features["cluster"]
+            max_diff = structure_features["max_diff_area"]
+
+            # Histogram is the most stable metric — resilient to
+            # minor angle/zoom shifts that inflate SSIM and edge.
+            # If histogram says images are the same (<0.05), dampen
+            # SSIM/edge noise from alignment artifacts.
+            if hist < 0.05:
+                ssim_adj = ssim * 0.2
+                edge_adj = edge * 0.2
+            else:
+                ssim_adj = ssim
+                edge_adj = edge
+
+            ratio = (
+                0.30 * ssim_adj
+                + 0.20 * edge_adj
+                + 0.25 * hist
+                + 0.15 * cluster
+                + 0.10 * max_diff
+            )
+            result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
 
             result.success = True
 
