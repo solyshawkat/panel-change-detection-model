@@ -60,6 +60,8 @@ MODEL_DIR = os.getenv("MODEL_DIR", "ml_models")
 SVM_MODEL_PATH = os.path.join(MODEL_DIR, "model.joblib")
 FEATURE_CONFIG_PATH = os.path.join(MODEL_DIR, "feature_config.json")
 FRAUD_THRESHOLD_PATH = os.path.join(MODEL_DIR, "fraud_threshold.json")
+RF_MODEL_DIR = os.path.join(MODEL_DIR, "rf_versions")
+RF_MODEL_CURRENT = os.path.join(MODEL_DIR, "model_rf_current.joblib")
 
 # ===============================
 # Pipeline Thresholds

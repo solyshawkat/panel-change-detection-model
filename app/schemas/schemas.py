@@ -9,7 +9,7 @@ Backend contract (Java sends camelCase):
 """
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 # ═══════════════════════════════════════════
@@ -159,6 +159,36 @@ class ServiceStats(BaseModel):
     avg_processing_ms: Optional[float] = None
     fraud_detected_count: int
     pending_review_count: int
+
+
+# ═══════════════════════════════════════════
+#  MODEL RETRAINING
+# ═══════════════════════════════════════════
+
+class PerClassMetrics(BaseModel):
+    """Per-class precision, recall, F1."""
+    precision: float
+    recall: float
+    f1: float
+    support: int
+
+
+class RetrainResponse(BaseModel):
+    """POST /retrain - Model retraining results."""
+    status: str = Field(..., description="'success', 'rejected', or 'error'")
+    message: str
+    total_samples: int = 0
+    positive_samples: int = 0  # changed (matching=false)
+    negative_samples: int = 0  # normal (matching=true)
+    cv_accuracy: Optional[float] = None
+    cv_std: Optional[float] = None
+    cv_f1: Optional[float] = None
+    cv_f1_std: Optional[float] = None
+    per_class_metrics: Optional[Dict[str, PerClassMetrics]] = None
+    feature_importance: Optional[Dict[str, float]] = None
+    model_version: Optional[int] = None
+    model_path: Optional[str] = None
+    trained_at: Optional[datetime] = None
 
 
 # ═══════════════════════════════════════════
