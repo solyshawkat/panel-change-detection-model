@@ -87,6 +87,7 @@ class PipelineRunner:
     """
 
     def __init__(self):
+        import threading
         # Lazy-load heavy modules only when first comparison runs
         self._models_loaded = False
         self._clip_model = None
@@ -97,6 +98,11 @@ class PipelineRunner:
         self._feature_config = None
         self._fraud_config = None
         self._device = "cpu"
+        # Random Forest model (auto-retrain)
+        self._rf_classifier = None
+        self._rf_feature_names = None
+        self._rf_loaded = False
+        self._rf_lock = threading.Lock()
 
     def _ensure_models(self):
         """Load ML models on first use (CLIP, SuperPoint, LightGlue, SVM)."""
@@ -175,6 +181,40 @@ class PipelineRunner:
 
         self._models_loaded = True
         logger.info(f"All models loaded in {time.time() - start:.1f}s")
+
+    def _load_rf_model(self):
+        """Thread-safe lazy load of Random Forest model."""
+        if self._rf_loaded:
+            return
+        with self._rf_lock:
+            if self._rf_loaded:  # double-check after acquiring lock
+                return
+            try:
+                rf_path = config.RF_MODEL_CURRENT
+                if Path(rf_path).exists():
+                    import joblib
+                    model_data = joblib.load(rf_path)
+                    self._rf_classifier = model_data["rf"]
+                    self._rf_feature_names = model_data["features"]
+                    logger.info(
+                        f"Random Forest v{model_data.get('version', '?')} loaded: "
+                        f"{model_data.get('n_samples')} samples, "
+                        f"CV accuracy={model_data.get('cv_accuracy', '?')}"
+                    )
+                else:
+                    logger.info("No RF model found, using pixel formula")
+            except Exception as e:
+                logger.warning(f"RF model load failed (using pixel formula): {e}")
+                self._rf_classifier = None
+            self._rf_loaded = True
+
+    def invalidate_rf_model(self):
+        """Force RF model reload on next comparison. Called after retraining."""
+        with self._rf_lock:
+            self._rf_loaded = False
+            self._rf_classifier = None
+            self._rf_feature_names = None
+            logger.info("RF model cache invalidated")
 
     async def run(
         self,
@@ -285,52 +325,65 @@ class PipelineRunner:
             )
             result.heatmap_path = heatmap_path
 
-            # ── M5: Direct Pixel Difference ──
-            # Weighted combination of raw M4 metrics (all 0-1 range).
-            # Replaces SVM which was trained on only 46 samples and
-            # distorted results (e.g. identical images → 39%).
-            # SVM code kept in _run_m5_classify() for future retraining.
-            logger.debug("M5: Direct Pixel Difference")
-            ssim = structure_features["ssim"]
-            edge = structure_features["edge"]
-            hist = structure_features["histogram"]
-            cluster = structure_features["cluster"]
-            max_diff = structure_features["max_diff_area"]
+            # ── M5: Classification ──
+            self._load_rf_model()
 
-            # Histogram is the most stable metric — resilient to
-            # minor angle/zoom shifts that inflate SSIM and edge.
-            # If histogram says images are the same (<0.05), dampen
-            # SSIM/edge noise from alignment artifacts.
-            if hist < 0.05:
-                ssim_adj = ssim * 0.2
-                edge_adj = edge * 0.2
+            if self._rf_classifier is not None:
+                # Path A: Trained Random Forest model
+                logger.debug("M5: Using Random Forest model")
+                feature_values = {
+                    "ssim_score": structure_features["ssim"],
+                    "edge_score": structure_features["edge"],
+                    "histogram_score": structure_features["histogram"],
+                    "cluster_score": structure_features["cluster"],
+                    "max_diff_area": structure_features["max_diff_area"],
+                    "stability_score": structure_features["stability"],
+                    "max_hue_shift": color_features["max_hue_shift"],
+                    "max_delta_e": color_features["max_delta_e"],
+                }
+                feature_vector = [feature_values[f] for f in self._rf_feature_names]
+                features_array = np.array(feature_vector).reshape(1, -1)
+                probability = float(self._rf_classifier.predict_proba(features_array)[0][1])
+                result.ratio = round(min(max(probability, 0.0), 1.0), 4)
+                logger.info(f"M5 RF: ratio={result.ratio}")
             else:
-                ssim_adj = ssim
-                edge_adj = edge
+                # Path B: Direct pixel formula (no trained model yet)
+                logger.debug("M5: Using direct pixel formula")
+                ssim = structure_features["ssim"]
+                edge = structure_features["edge"]
+                hist = structure_features["histogram"]
+                cluster = structure_features["cluster"]
+                max_diff = structure_features["max_diff_area"]
 
-            ratio = (
-                0.30 * ssim_adj
-                + 0.20 * edge_adj
-                + 0.25 * hist
-                + 0.15 * cluster
-                + 0.10 * max_diff
-            )
+                # Histogram gating: if histogram says images are the same
+                # (<0.05), dampen SSIM/edge noise from alignment artifacts.
+                if hist < 0.05:
+                    ssim_adj = ssim * 0.2
+                    edge_adj = edge * 0.2
+                else:
+                    ssim_adj = ssim
+                    edge_adj = edge
 
-            # CLIP modulation: CLIP understands "same object, different
-            # angle" semantically. If CLIP similarity is high (>0.85),
-            # the images are the same object — reduce pixel noise from
-            # angle/lighting shifts. fraud_score = CLIP cosine similarity.
-            clip_sim = result.fraud_score
-            if clip_sim and clip_sim > 0.85:
-                # Scale: 0.85 → multiply by 0.6, 0.95 → multiply by 0.2
-                clip_dampen = max(0.2, 1.0 - (clip_sim - 0.85) * 4.0)
-                ratio = ratio * clip_dampen
-                logger.debug(
-                    f"CLIP modulation: sim={clip_sim:.3f}, "
-                    f"dampen={clip_dampen:.2f}, ratio={ratio:.4f}"
+                ratio = (
+                    0.30 * ssim_adj
+                    + 0.20 * edge_adj
+                    + 0.25 * hist
+                    + 0.15 * cluster
+                    + 0.10 * max_diff
                 )
 
-            result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
+                # CLIP modulation: if CLIP says "same object" (high
+                # similarity), dampen pixel noise from angle/lighting.
+                clip_sim = result.fraud_score
+                if clip_sim and clip_sim > 0.85:
+                    clip_dampen = max(0.2, 1.0 - (clip_sim - 0.85) * 4.0)
+                    ratio = ratio * clip_dampen
+                    logger.debug(
+                        f"CLIP modulation: sim={clip_sim:.3f}, "
+                        f"dampen={clip_dampen:.2f}, ratio={ratio:.4f}"
+                    )
+
+                result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
 
             result.success = True
 

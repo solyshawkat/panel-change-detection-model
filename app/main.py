@@ -22,6 +22,7 @@ from app.core.eureka import register as eureka_register, deregister as eureka_de
 from app.api.baseline import router as baseline_router
 from app.api.compare import router as compare_router
 from app.api.feedback import router as feedback_router
+from app.api.retrain import router as retrain_router
 from app.schemas.schemas import HealthResponse
 import logging
 
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     Path(config.BASELINE_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.HEATMAP_DIR).mkdir(parents=True, exist_ok=True)
     Path(config.MODEL_DIR).mkdir(parents=True, exist_ok=True)
+    Path(config.RF_MODEL_DIR).mkdir(parents=True, exist_ok=True)
     logger.info("Storage directories ready")
 
     await eureka_register()
@@ -83,6 +85,7 @@ app.add_middleware(
 app.include_router(baseline_router, prefix="/pcd-ai")
 app.include_router(compare_router, prefix="/pcd-ai")
 app.include_router(feedback_router, prefix="/pcd-ai")
+app.include_router(retrain_router, prefix="/pcd-ai")
 
 
 @app.get("/pcd-ai/health", response_model=HealthResponse, tags=["Health"])
@@ -122,6 +125,9 @@ async def root():
                 "POST /pcd-ai/feedback/": "Submit supervisor review",
                 "GET /pcd-ai/feedback/accuracy": "Model accuracy stats",
                 "GET /pcd-ai/feedback/stats": "Service statistics",
+            },
+            "retrain": {
+                "POST /pcd-ai/retrain/": "Retrain model from supervisor feedback",
             },
         },
     }
