@@ -138,12 +138,24 @@ class PipelineRunner:
             logger.warning(f"LightGlue load failed (M3 will use ORB fallback): {e}")
 
         # ── Load SVM model (M5: Classification) ──
+        self._svm_scaler = None
+        self._svm_classifier = None
         try:
             import joblib
-            self._svm_model = joblib.load(config.SVM_MODEL_PATH)
-            logger.info(f"SVM model loaded from {config.SVM_MODEL_PATH}")
+            model_data = joblib.load(config.SVM_MODEL_PATH)
+            # model.joblib is a dict: {'scaler': StandardScaler, 'svm': SVC, ...}
+            if isinstance(model_data, dict):
+                self._svm_classifier = model_data["svm"]
+                self._svm_scaler = model_data["scaler"]
+                self._svm_model = model_data  # keep full dict for reference
+                logger.info(f"SVM model loaded (dict format) from {config.SVM_MODEL_PATH}")
+            else:
+                # Fallback: if model is a plain sklearn object
+                self._svm_classifier = model_data
+                self._svm_model = model_data
+                logger.info(f"SVM model loaded (plain) from {config.SVM_MODEL_PATH}")
         except Exception as e:
-            logger.warning(f"SVM model load failed: {e}")
+            logger.error(f"SVM model load failed: {e}")
 
         # ── Load feature config ──
         try:
@@ -960,6 +972,11 @@ class PipelineRunner:
     def _run_m5_classify(self, structure_features: dict) -> dict:
         """M5: SVM classification using model.joblib.
 
+        model.joblib is a dict containing:
+            - 'svm': fitted SVC with predict_proba
+            - 'scaler': fitted StandardScaler
+            - 'features': ordered feature names
+
         Uses the 7 features specified in feature_config.json:
             1. max_diff_connected_max_area
             2. ratio_top5_to_ssim
@@ -968,17 +985,13 @@ class PipelineRunner:
             5. cluster_score
             6. min_top5pct_change (top5pct_change — single ref, so min == value)
             7. max_change_peakedness (change_peakedness — single ref, so max == value)
-
-        The model includes a built-in StandardScaler via a sklearn Pipeline,
-        so we pass raw feature values and let the model handle scaling.
         """
-        if self._svm_model is None:
-            logger.warning("SVM model not loaded, returning default probability")
-            return {"probability": 0.15}
+        if self._svm_classifier is None:
+            logger.error("SVM classifier not loaded — cannot classify")
+            return {"probability": 0.15, "error": "SVM not loaded"}
 
         try:
             # Map feature_config names to structure_features keys
-            # With a single baseline, min_* == max_* == the computed value
             feature_map = {
                 "max_diff_connected_max_area": structure_features.get("max_diff_area", 0),
                 "ratio_top5_to_ssim": structure_features.get("ratio_top5_to_ssim", 0),
@@ -1006,8 +1019,13 @@ class PipelineRunner:
             feature_vector = [feature_map.get(name, 0.0) for name in feature_names]
             features_array = np.array(feature_vector).reshape(1, -1)
 
-            # Scale using the scaler params from feature_config
-            if self._feature_config and "scaler_params" in self._feature_config:
+            logger.info(f"M5 raw features: {dict(zip(feature_names, feature_vector))}")
+
+            # Scale using the model's fitted StandardScaler
+            if self._svm_scaler is not None:
+                features_scaled = self._svm_scaler.transform(features_array)
+            elif self._feature_config and "scaler_params" in self._feature_config:
+                # Fallback: manual scaling from feature_config.json
                 scaler = self._feature_config["scaler_params"]
                 mean = np.array(scaler["mean"])
                 scale = np.array(scaler["scale"])
@@ -1015,22 +1033,21 @@ class PipelineRunner:
             else:
                 features_scaled = features_array
 
-            # Predict probability
-            if hasattr(self._svm_model, "predict_proba"):
-                probability = float(self._svm_model.predict_proba(features_scaled)[0][1])
+            # Predict probability using the SVC classifier
+            if hasattr(self._svm_classifier, "predict_proba"):
+                probability = float(self._svm_classifier.predict_proba(features_scaled)[0][1])
             else:
-                decision = float(self._svm_model.decision_function(features_scaled)[0])
-                # Sigmoid approximation
+                decision = float(self._svm_classifier.decision_function(features_scaled)[0])
                 probability = 1.0 / (1.0 + np.exp(-decision))
 
-            logger.debug(
-                f"SVM prediction: probability={probability:.4f}, "
-                f"features={dict(zip(feature_names, feature_vector))}"
+            logger.info(
+                f"M5 SVM prediction: probability={probability:.6f}, "
+                f"ratio={probability * 100:.2f}%"
             )
             return {"probability": round(probability, 6)}
         except Exception as e:
-            logger.error(f"SVM classification error: {e}")
-            return {"probability": 0.15}
+            logger.error(f"SVM classification error: {e}", exc_info=True)
+            return {"probability": 0.15, "error": str(e)}
 
 
 # Singleton
