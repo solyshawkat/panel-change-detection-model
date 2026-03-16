@@ -347,43 +347,61 @@ class PipelineRunner:
                 result.ratio = round(min(max(probability, 0.0), 1.0), 4)
                 logger.info(f"M5 RF: ratio={result.ratio}")
             else:
-                # Path B: Direct pixel formula (no trained model yet)
-                logger.debug("M5: Using direct pixel formula")
+                # Path B: Alignment-aware formula (no trained model yet)
+                # Two paths based on alignment quality:
+                #   Good alignment → pixel metrics are reliable (SSIM, edge)
+                #   Poor alignment → use hash-based metrics (more robust)
+                logger.debug("M5: Using alignment-aware pixel formula")
+                inliers = result.alignment_inliers or 0
+
                 ssim = structure_features["ssim"]
                 edge = structure_features["edge"]
                 hist = structure_features["histogram"]
                 cluster = structure_features["cluster"]
                 max_diff = structure_features["max_diff_area"]
 
-                # Histogram gating: if histogram says images are the same
-                # (<0.05), dampen SSIM/edge noise from alignment artifacts.
-                if hist < 0.05:
-                    ssim_adj = ssim * 0.2
-                    edge_adj = edge * 0.2
+                if inliers >= 30:
+                    # Good alignment: pixel metrics are trustworthy
+                    aligned_ratio = (
+                        0.45 * ssim
+                        + 0.30 * edge
+                        + 0.25 * hist
+                    )
+                    # Also compute hash-based ratio as a ceiling
+                    hash_ratio = (
+                        0.45 * ssim
+                        + 0.35 * hist
+                        + 0.20 * cluster
+                    )
+                    # Take minimum: if alignment helped, aligned < hash
+                    # If images are truly different, both are high
+                    ratio = min(aligned_ratio, hash_ratio)
                 else:
-                    ssim_adj = ssim
-                    edge_adj = edge
+                    # Poor alignment: SSIM/edge inflated by perspective
+                    # Use histogram + cluster (alignment-independent)
+                    ratio = (
+                        0.45 * hist
+                        + 0.25 * cluster
+                        + 0.20 * max_diff
+                        + 0.10 * ssim
+                    )
 
-                ratio = (
-                    0.30 * ssim_adj
-                    + 0.20 * edge_adj
-                    + 0.25 * hist
-                    + 0.15 * cluster
-                    + 0.10 * max_diff
-                )
-
-                # CLIP modulation: if CLIP says "same object" (high
-                # similarity), dampen pixel noise from angle/lighting.
+                # CLIP floor: if CLIP says truly different object,
+                # enforce minimum ratio regardless of pixel metrics.
                 clip_sim = result.fraud_score
-                if clip_sim and clip_sim > 0.85:
-                    clip_dampen = max(0.2, 1.0 - (clip_sim - 0.85) * 4.0)
-                    ratio = ratio * clip_dampen
+                if clip_sim and clip_sim < 0.80:
+                    clip_floor = 0.50
+                    ratio = max(ratio, clip_floor)
                     logger.debug(
-                        f"CLIP modulation: sim={clip_sim:.3f}, "
-                        f"dampen={clip_dampen:.2f}, ratio={ratio:.4f}"
+                        f"CLIP floor: sim={clip_sim:.3f}, "
+                        f"floor={clip_floor}, ratio={ratio:.4f}"
                     )
 
                 result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
+                logger.info(
+                    f"M5 pixel: ratio={result.ratio} inliers={inliers} "
+                    f"ssim={ssim:.3f} edge={edge:.3f} hist={hist:.3f}"
+                )
 
             result.success = True
 
