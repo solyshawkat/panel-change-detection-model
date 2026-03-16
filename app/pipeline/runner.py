@@ -315,6 +315,21 @@ class PipelineRunner:
                 + 0.15 * cluster
                 + 0.10 * max_diff
             )
+
+            # CLIP modulation: CLIP understands "same object, different
+            # angle" semantically. If CLIP similarity is high (>0.85),
+            # the images are the same object — reduce pixel noise from
+            # angle/lighting shifts. fraud_score = CLIP cosine similarity.
+            clip_sim = result.fraud_score
+            if clip_sim and clip_sim > 0.85:
+                # Scale: 0.85 → multiply by 0.6, 0.95 → multiply by 0.2
+                clip_dampen = max(0.2, 1.0 - (clip_sim - 0.85) * 4.0)
+                ratio = ratio * clip_dampen
+                logger.debug(
+                    f"CLIP modulation: sim={clip_sim:.3f}, "
+                    f"dampen={clip_dampen:.2f}, ratio={ratio:.4f}"
+                )
+
             result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
 
             result.success = True
