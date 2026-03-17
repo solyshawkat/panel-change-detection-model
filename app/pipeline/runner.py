@@ -318,13 +318,6 @@ class PipelineRunner:
             result.max_hue_shift = color_features["max_hue_shift"]
             result.max_delta_e = color_features["max_delta_e"]
 
-            # Generate heatmap
-            heatmap_path = self._generate_heatmap(
-                baseline_enhanced, patrol_warped,
-                structure_features.get("ssim_diff"),
-            )
-            result.heatmap_path = heatmap_path
-
             # ── M5: Classification ──
             self._load_rf_model()
 
@@ -340,11 +333,26 @@ class PipelineRunner:
                     "stability_score": structure_features["stability"],
                     "max_hue_shift": color_features["max_hue_shift"],
                     "max_delta_e": color_features["max_delta_e"],
+                    "alignment_inliers": float(result.alignment_inliers or 0),
                 }
                 feature_vector = [feature_values[f] for f in self._rf_feature_names]
                 features_array = np.array(feature_vector).reshape(1, -1)
                 probability = float(self._rf_classifier.predict_proba(features_array)[0][1])
-                result.ratio = round(min(max(probability, 0.0), 1.0), 4)
+                ratio = round(min(max(probability, 0.0), 1.0), 4)
+
+                # CLIP floor safety net: if CLIP says truly different
+                # object, enforce minimum ratio even after RF prediction
+                clip_sim = result.fraud_score
+                if clip_sim and clip_sim < 0.80:
+                    clip_floor = 0.50
+                    if ratio < clip_floor:
+                        logger.debug(
+                            f"CLIP floor override: RF={ratio}, "
+                            f"CLIP sim={clip_sim:.3f}, floor={clip_floor}"
+                        )
+                        ratio = clip_floor
+
+                result.ratio = ratio
                 logger.info(f"M5 RF: ratio={result.ratio}")
             else:
                 # Path B: Alignment-aware formula (no trained model yet)
@@ -402,6 +410,16 @@ class PipelineRunner:
                     f"M5 pixel: ratio={result.ratio} inliers={inliers} "
                     f"ssim={ssim:.3f} edge={edge:.3f} hist={hist:.3f}"
                 )
+
+            # Generate heatmap only when ratio >= 10% (skip for clearly identical panels)
+            if result.ratio >= 0.10:
+                heatmap_path = self._generate_heatmap(
+                    baseline_enhanced, patrol_warped,
+                    structure_features.get("ssim_diff"),
+                )
+                result.heatmap_path = heatmap_path
+            else:
+                logger.debug(f"Skipping heatmap: ratio={result.ratio} < 0.10")
 
             result.success = True
 
