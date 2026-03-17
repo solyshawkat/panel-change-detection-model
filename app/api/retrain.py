@@ -25,6 +25,7 @@ router = APIRouter(prefix="/retrain", tags=["Model Retraining"])
 FEATURE_COLUMNS = [
     "ssim_score", "edge_score", "histogram_score", "cluster_score",
     "max_diff_area", "stability_score", "max_hue_shift", "max_delta_e",
+    "alignment_inliers",
 ]
 
 MIN_TOTAL_SAMPLES = 200
