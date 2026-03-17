@@ -88,6 +88,9 @@ class Comparison(Base):
     processing_ms = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
 
+    # -- Object Classification --
+    object_category = Column(String(50), nullable=True)   # CLIP auto-detected category
+
     # -- Supervisor Feedback --
     supervisor_reviewed_at = Column(DateTime, nullable=True)
 
