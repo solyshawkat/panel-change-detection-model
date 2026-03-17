@@ -7,6 +7,25 @@ Each module has a clear contract:
 - Can Fail: whether it can stop the pipeline
 
 The runner tracks timing and collects all results into a PipelineResult.
+
+UPGRADE PATH — DINOv2 Embedding Replacement (Phase 2):
+    When 200+ labeled comparisons are collected and RF accuracy plateaus,
+    replace the 9 handcrafted pixel features (M4) with DINOv2 embeddings:
+
+    1. Load DINOv2 ViT-S/14 (facebook/dinov2-small, ~85MB) or
+       ViT-B/14 (facebook/dinov2-base, ~300MB) via torch.hub or transformers
+    2. For each image: resize to 224x224 → normalize → forward pass → 384/768-dim vector
+    3. Compute difference vector: abs(embedding_base - embedding_patrol)
+    4. Feed difference vector (384/768 features) into the RF instead of the 9 pixel features
+    5. Retrain RF on same labeled data — no new labels needed
+
+    Why: DINOv2 understands semantic structure (shape, texture, spatial layout)
+    not just pixel values. This handles lighting changes, angle differences,
+    and same-brand-different-unit cases that pixel features struggle with.
+
+    Runtime: +200-500ms on CPU. No GPU required. CLIP stays for fraud detection + categories.
+    The RF training infrastructure, retrain endpoint, and supervisor feedback loop
+    all remain unchanged — only the feature extraction step changes.
 """
 import json
 import time
@@ -71,6 +90,9 @@ class PipelineResult:
 
     # M5: Classification
     ratio: float = 0.0
+
+    # Object category (CLIP auto-detected)
+    object_category: Optional[str] = None
 
     # Output
     heatmap_path: Optional[str] = None
@@ -269,8 +291,12 @@ class PipelineRunner:
             if not result.is_valid:
                 result.stopped_at = "M2_FRAUD"
                 result.error = f"Fraud detected: CLIP score {result.fraud_score:.3f} below threshold {config.FRAUD_THRESHOLD}"
+                result.object_category = self._classify_object(baseline_image)
                 result.processing_ms = int((time.time() - start_time) * 1000)
                 return result
+
+            # ── Object Classification (reuses CLIP, no extra model load) ──
+            result.object_category = self._classify_object(baseline_image)
 
             # ── M3: Alignment ──
             logger.debug("M3: Image Alignment")
@@ -579,6 +605,78 @@ class PipelineRunner:
         except Exception as e:
             logger.error(f"CLIP fraud detection error: {e}")
             return {"is_valid": True, "score": 1.0}
+
+    # ─────────────────────────────────────────
+    #  Object Category Classification (CLIP)
+    # ─────────────────────────────────────────
+
+    # Categories that CLIP will classify against
+    _OBJECT_CATEGORIES = [
+        "electrical panel",
+        "fire alarm panel",
+        "fire extinguisher",
+        "control panel",
+        "meter box",
+        "circuit breaker",
+        "generator",
+        "air conditioning unit",
+        "security camera",
+        "server rack",
+        "vehicle",
+        "door or gate",
+        "valve or pipe",
+        "water tank",
+        "pump",
+        "boiler or heater",
+        "elevator or lift",
+        "emergency exit sign",
+        "sprinkler system",
+        "fuel storage",
+        "transformer",
+        "solar panel",
+        "fence or barrier",
+        "safe or vault",
+        "toolbox or cabinet",
+        "fire hose",
+        "gas cylinder",
+        "roof or ceiling",
+        "parking lot",
+        "stairwell",
+        "window or glass",
+        "other equipment",
+    ]
+
+    def _classify_object(self, image: np.ndarray) -> Optional[str]:
+        """Classify the object in the image using CLIP zero-shot classification."""
+        if self._clip_model is None or self._clip_processor is None:
+            return None
+
+        try:
+            import torch
+            from PIL import Image
+
+            pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            text_labels = [f"a photo of a {cat}" for cat in self._OBJECT_CATEGORIES]
+
+            inputs = self._clip_processor(
+                text=text_labels, images=pil_img,
+                return_tensors="pt", padding=True
+            )
+            with torch.no_grad():
+                outputs = self._clip_model(**inputs)
+                logits = outputs.logits_per_image[0]
+                probs = logits.softmax(dim=0)
+
+            best_idx = int(probs.argmax())
+            best_prob = float(probs[best_idx])
+            category = self._OBJECT_CATEGORIES[best_idx]
+
+            logger.debug(f"Object classification: {category} ({best_prob:.2f})")
+            return category
+
+        except Exception as e:
+            logger.warning(f"Object classification failed: {e}")
+            return None
 
     # ─────────────────────────────────────────
     #  M3: Alignment (SuperPoint + LightGlue)

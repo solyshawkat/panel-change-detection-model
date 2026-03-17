@@ -149,6 +149,9 @@ async def create_comparison(
     comparison.alignment_inliers = pipeline_result.alignment_inliers
     comparison.alignment_method = pipeline_result.alignment_method
 
+    # Object category (CLIP auto-detected)
+    comparison.object_category = pipeline_result.object_category
+
     # Quality + output
     comparison.blur_score = pipeline_result.blur_score
     comparison.heatmap_path = pipeline_result.heatmap_path
