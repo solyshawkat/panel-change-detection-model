@@ -1,9 +1,11 @@
 """
 Object Verification API.
-Quick check: do two images show the same object?
-Uses CLIP cosine similarity — no DB writes, stateless inference.
+Pre-check: same object? Photo quality? Alignment?
+Uses CLIP + pipeline checks — no DB writes, stateless inference.
 """
 import logging
+import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, status
 from app.core import config
 from app.schemas.schemas import VerifyRequest, VerifyResponse
@@ -17,9 +19,13 @@ router = APIRouter(prefix="/verify", tags=["Object Verification"])
 @router.post("", response_model=VerifyResponse, status_code=status.HTTP_200_OK)
 async def verify_same_object(request: VerifyRequest):
     """
-    Check if two images show the same object using CLIP similarity.
+    Pre-check before comparison: same object, photo quality, and alignment.
 
-    Returns sameObject: true if same object, false if different.
+    - sameObject: CLIP similarity >= 0.85
+    - isBlurry: Laplacian variance below threshold (null if different object)
+    - isBright: brightness within acceptable range (null if different object)
+    - isAligned: enough keypoint matches for good comparison (null if different object)
+
     No database writes — purely stateless inference.
     """
     downloader = get_downloader()
@@ -41,7 +47,7 @@ async def verify_same_object(request: VerifyRequest):
             detail=f"Failed to download imageUrl2: {str(e)}"
         )
 
-    # Run CLIP similarity (reuses already-loaded model)
+    # Step 1: CLIP same-object check
     pipeline = get_pipeline()
     pipeline._ensure_models()
     fraud_result = pipeline._run_m2_fraud(image1, image2)
@@ -51,4 +57,35 @@ async def verify_same_object(request: VerifyRequest):
 
     logger.info(f"Verify: similarity={score:.4f} sameObject={same}")
 
-    return VerifyResponse(same_object=same)
+    # If different object, return nulls for quality checks
+    if not same:
+        return VerifyResponse(same_object=False)
+
+    # Step 2: Blur check on patrol image (image2)
+    gray2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+    blur_score = cv2.Laplacian(gray2, cv2.CV_64F).var()
+    is_blurry = blur_score < config.BLUR_WARNING_THRESHOLD
+
+    # Step 3: Brightness check on patrol image (image2)
+    brightness = float(gray2.mean())
+    is_bright = brightness >= config.BRIGHTNESS_WARNING_THRESHOLD
+
+    # Step 4: Alignment check (quick keypoint matching)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced1 = clahe.apply(cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY))
+    enhanced2 = clahe.apply(gray2)
+    alignment_result = pipeline._run_m3_alignment(enhanced1, enhanced2)
+    inliers = alignment_result["inliers"]
+    is_aligned = inliers >= 30
+
+    logger.info(
+        f"Verify quality: blur={blur_score:.0f} brightness={brightness:.0f} "
+        f"inliers={inliers} blurry={is_blurry} bright={is_bright} aligned={is_aligned}"
+    )
+
+    return VerifyResponse(
+        same_object=True,
+        is_blurry=is_blurry,
+        is_bright=is_bright,
+        is_aligned=is_aligned,
+    )

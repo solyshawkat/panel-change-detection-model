@@ -196,21 +196,24 @@ class RetrainResponse(BaseModel):
 # ═══════════════════════════════════════════
 
 class VerifyRequest(BaseModel):
-    """POST /verify - Check if two images show the same object."""
-    image_url_1: str = Field(..., alias="imageUrl1", description="First image URL")
-    image_url_2: str = Field(..., alias="imageUrl2", description="Second image URL")
+    """POST /verify - Check if two images show the same object and photo quality."""
+    image_url_1: str = Field(..., alias="imageUrl1", description="Baseline image URL")
+    image_url_2: str = Field(..., alias="imageUrl2", description="Patrol image URL to check")
 
     model_config = ConfigDict(populate_by_name=True, json_schema_extra={
         "example": {
-            "imageUrl1": "https://objectstorage.../image1.jpg",
-            "imageUrl2": "https://objectstorage.../image2.jpg"
+            "imageUrl1": "https://objectstorage.../baseline.jpg",
+            "imageUrl2": "https://objectstorage.../patrol.jpg"
         }
     })
 
 
 class VerifyResponse(BaseModel):
-    """Response: whether two images show the same object."""
+    """Response: same object check + photo quality indicators."""
     same_object: bool = Field(..., alias="sameObject", description="true if images show the same object")
+    is_blurry: Optional[bool] = Field(None, alias="isBlurry", description="true if patrol photo is blurry. null if different object")
+    is_bright: Optional[bool] = Field(None, alias="isBright", description="true if brightness is acceptable. null if different object")
+    is_aligned: Optional[bool] = Field(None, alias="isAligned", description="true if angle/position is close enough. null if different object")
 
     model_config = ConfigDict(populate_by_name=True)
 
