@@ -23,6 +23,7 @@ from app.api.baseline import router as baseline_router
 from app.api.compare import router as compare_router
 from app.api.feedback import router as feedback_router
 from app.api.retrain import router as retrain_router
+from app.api.verify import router as verify_router
 from app.schemas.schemas import HealthResponse
 import logging
 
@@ -86,6 +87,7 @@ app.include_router(baseline_router, prefix="/pcd-ai")
 app.include_router(compare_router, prefix="/pcd-ai")
 app.include_router(feedback_router, prefix="/pcd-ai")
 app.include_router(retrain_router, prefix="/pcd-ai")
+app.include_router(verify_router, prefix="/pcd-ai")
 
 
 @app.get("/pcd-ai/health", response_model=HealthResponse, tags=["Health"])
@@ -128,6 +130,9 @@ async def root():
             },
             "retrain": {
                 "POST /pcd-ai/retrain/": "Retrain model from supervisor feedback",
+            },
+            "verify": {
+                "POST /pcd-ai/verify/": "Check if two images show the same object",
             },
         },
     }

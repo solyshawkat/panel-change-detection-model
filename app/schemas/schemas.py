@@ -192,6 +192,30 @@ class RetrainResponse(BaseModel):
 
 
 # ═══════════════════════════════════════════
+#  OBJECT VERIFICATION
+# ═══════════════════════════════════════════
+
+class VerifyRequest(BaseModel):
+    """POST /verify - Check if two images show the same object."""
+    image_url_1: str = Field(..., alias="imageUrl1", description="First image URL")
+    image_url_2: str = Field(..., alias="imageUrl2", description="Second image URL")
+
+    model_config = ConfigDict(populate_by_name=True, json_schema_extra={
+        "example": {
+            "imageUrl1": "https://objectstorage.../image1.jpg",
+            "imageUrl2": "https://objectstorage.../image2.jpg"
+        }
+    })
+
+
+class VerifyResponse(BaseModel):
+    """Response: whether two images show the same object."""
+    same_object: bool = Field(..., alias="sameObject", description="true if images show the same object")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ═══════════════════════════════════════════
 #  HEALTH
 # ═══════════════════════════════════════════
 
