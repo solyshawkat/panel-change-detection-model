@@ -10,6 +10,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, status
 from app.core import config
 from app.schemas.schemas import VerifyRequest, VerifyResponse
+from app.utils.image_downloader import get_downloader, ImageDownloadError
 from app.pipeline.runner import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,17 @@ async def verify_same_object(request: VerifyRequest):
 
     No database writes — purely stateless inference.
     """
-    # Decode base64 images
-    image1 = _decode_base64_image(request.image_base64_1, "imageBase64_1")
+    # Download baseline image from URL
+    downloader = get_downloader()
+    try:
+        image1 = await downloader.download(request.image_url_1)
+    except ImageDownloadError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to download baseline image: {str(e)}"
+        )
+
+    # Decode patrol image from base64
     image2 = _decode_base64_image(request.image_base64_2, "imageBase64_2")
 
     # Step 1: CLIP same-object check
