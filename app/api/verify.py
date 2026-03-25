@@ -3,23 +3,44 @@ Object Verification API.
 Pre-check: same object? Photo quality? Alignment?
 Uses CLIP + pipeline checks — no DB writes, stateless inference.
 """
+import base64
 import logging
 import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException, status
 from app.core import config
 from app.schemas.schemas import VerifyRequest, VerifyResponse
-from app.utils.image_downloader import get_downloader, ImageDownloadError
 from app.pipeline.runner import get_pipeline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/verify", tags=["Object Verification"])
 
 
+def _decode_base64_image(b64_string: str, label: str) -> np.ndarray:
+    """Decode a base64 string to an OpenCV BGR image."""
+    try:
+        # Strip data URI prefix if present (e.g., "data:image/jpeg;base64,...")
+        if "," in b64_string:
+            b64_string = b64_string.split(",", 1)[1]
+        img_bytes = base64.b64decode(b64_string)
+        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("cv2.imdecode returned None")
+        return image
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to decode {label}: {str(e)}"
+        )
+
+
 @router.post("", response_model=VerifyResponse, status_code=status.HTTP_200_OK)
 async def verify_same_object(request: VerifyRequest):
     """
     Pre-check before comparison: same object, photo quality, and alignment.
+
+    Accepts base64-encoded images (with or without data URI prefix).
 
     - sameObject: CLIP similarity >= 0.85
     - isBlurry: Laplacian variance below threshold (null if different object)
@@ -28,24 +49,9 @@ async def verify_same_object(request: VerifyRequest):
 
     No database writes — purely stateless inference.
     """
-    downloader = get_downloader()
-
-    # Download both images
-    try:
-        image1 = await downloader.download(request.image_url_1)
-    except ImageDownloadError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to download imageUrl1: {str(e)}"
-        )
-
-    try:
-        image2 = await downloader.download(request.image_url_2)
-    except ImageDownloadError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to download imageUrl2: {str(e)}"
-        )
+    # Decode base64 images
+    image1 = _decode_base64_image(request.image_base64_1, "imageBase64_1")
+    image2 = _decode_base64_image(request.image_base64_2, "imageBase64_2")
 
     # Step 1: CLIP same-object check
     pipeline = get_pipeline()

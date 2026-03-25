@@ -197,13 +197,13 @@ class RetrainResponse(BaseModel):
 
 class VerifyRequest(BaseModel):
     """POST /verify - Check if two images show the same object and photo quality."""
-    image_url_1: str = Field(..., alias="imageUrl1", description="Baseline image URL")
-    image_url_2: str = Field(..., alias="imageUrl2", description="Patrol image URL to check")
+    image_base64_1: str = Field(..., alias="imageBase64_1", description="Baseline image as base64 string")
+    image_base64_2: str = Field(..., alias="imageBase64_2", description="Patrol image as base64 string to check")
 
     model_config = ConfigDict(populate_by_name=True, json_schema_extra={
         "example": {
-            "imageUrl1": "https://objectstorage.../baseline.jpg",
-            "imageUrl2": "https://objectstorage.../patrol.jpg"
+            "imageBase64_1": "<base64 encoded baseline image>",
+            "imageBase64_2": "<base64 encoded patrol image>"
         }
     })
 
