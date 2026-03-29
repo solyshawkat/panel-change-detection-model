@@ -68,10 +68,8 @@ async def verify_same_object(request: VerifyRequest):
     pipeline._ensure_models()
 
     if pipeline._clip_model is None or pipeline._clip_processor is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="CLIP model not loaded. Cannot verify objects."
-        )
+        logger.error("CLIP model not loaded — verify returning sameObject=false as safety default")
+        return VerifyResponse(same_object=False)
 
     fraud_result = pipeline._run_m2_fraud(image1, image2)
 
