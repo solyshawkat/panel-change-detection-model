@@ -27,14 +27,21 @@ DATABASE = {
 }
 
 # SQLAlchemy connection strings
-DATABASE_URL = (
-    f"postgresql+asyncpg://{DATABASE['username']}:{DATABASE['password']}"
-    f"@{DATABASE['host']}:{DATABASE['port']}/{DATABASE['name']}"
-)
-DATABASE_URL_SYNC = (
-    f"postgresql://{DATABASE['username']}:{DATABASE['password']}"
-    f"@{DATABASE['host']}:{DATABASE['port']}/{DATABASE['name']}"
-)
+# Support both a full DATABASE_URL env var or individual DB_* vars
+_db_url = os.getenv("DATABASE_URL")
+if _db_url:
+    # Ensure asyncpg driver for async usage
+    DATABASE_URL = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    DATABASE_URL_SYNC = _db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+else:
+    DATABASE_URL = (
+        f"postgresql+asyncpg://{DATABASE['username']}:{DATABASE['password']}"
+        f"@{DATABASE['host']}:{DATABASE['port']}/{DATABASE['name']}"
+    )
+    DATABASE_URL_SYNC = (
+        f"postgresql://{DATABASE['username']}:{DATABASE['password']}"
+        f"@{DATABASE['host']}:{DATABASE['port']}/{DATABASE['name']}"
+    )
 
 # ===============================
 # Eureka Service Discovery
