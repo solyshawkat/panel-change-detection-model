@@ -74,7 +74,7 @@ RF_MODEL_CURRENT = os.path.join(MODEL_DIR, "model_rf_current.joblib")
 # Pipeline Thresholds
 # ===============================
 FRAUD_THRESHOLD = float(os.getenv("FRAUD_THRESHOLD", 0.751))
-VERIFY_THRESHOLD = float(os.getenv("VERIFY_THRESHOLD", 0.78))
+VERIFY_THRESHOLD = float(os.getenv("VERIFY_THRESHOLD", 0.85))
 SVM_THRESHOLD = float(os.getenv("SVM_THRESHOLD", 0.389))
 ALIGNMENT_MIN_INLIERS = int(os.getenv("ALIGNMENT_MIN_INLIERS", 10))
 BLUR_WARNING_THRESHOLD = float(os.getenv("BLUR_WARNING_THRESHOLD", 30.0))
