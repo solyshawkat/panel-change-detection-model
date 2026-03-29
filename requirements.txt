@@ -28,6 +28,7 @@ py_eureka_client==0.11.10
 # -- CLIP (M2 - Fraud Detection) --
 torch>=2.1.0
 transformers>=4.36.0
+packaging>=21.0
 
 # -- SuperPoint + LightGlue (M3 - Alignment) --
 lightglue @ git+https://github.com/cvg/LightGlue.git
