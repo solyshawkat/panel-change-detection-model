@@ -2,6 +2,7 @@
 Database connection management.
 Async SQLAlchemy with PostgreSQL.
 """
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.core import config
@@ -39,9 +40,22 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
-    """Create all tables (for development only; use Alembic in production)."""
+    """Create all tables and auto-add new columns to existing tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Auto-add new columns that create_all can't add to existing tables
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'ai_comparisons' AND column_name = 'object_category'
+                ) THEN
+                    ALTER TABLE ai_comparisons ADD COLUMN object_category VARCHAR(50) NULL;
+                END IF;
+            END $$;
+        """))
 
 
 async def close_db():
