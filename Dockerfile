@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download ML models during build (no internet needed at runtime)
 RUN python -c "from transformers import CLIPModel, CLIPProcessor; CLIPModel.from_pretrained('openai/clip-vit-base-patch32'); CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')"
 RUN python -c "from lightglue import LightGlue, SuperPoint; SuperPoint(max_num_keypoints=2048).eval(); LightGlue(features='superpoint').eval()"
+RUN python -c "import timm; timm.create_model('vit_small_patch14_dinov2.lvd142m', pretrained=True, num_classes=0)"
 
 # Application code
 COPY . .

@@ -30,5 +30,8 @@ packaging>=21.0
 torch>=2.1.0
 transformers>=4.36.0
 
+# -- DINOv2 (Verify + Compare - Semantic Similarity) --
+timm>=0.9.0
+
 # -- SuperPoint + LightGlue (M3 - Alignment) --
 lightglue @ git+https://github.com/cvg/LightGlue.git
