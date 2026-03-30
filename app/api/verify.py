@@ -1,7 +1,7 @@
 """
 Object Verification API.
 Pre-check: same object? Photo quality? Alignment?
-Uses CLIP + pipeline checks — no DB writes, stateless inference.
+Uses DINOv2 for same-object check — no DB writes, stateless inference.
 """
 import base64
 import logging
@@ -41,9 +41,9 @@ async def verify_same_object(request: VerifyRequest):
     """
     Pre-check before comparison: same object, photo quality, and alignment.
 
-    Accepts base64-encoded images (with or without data URI prefix).
+    Uses DINOv2 semantic similarity for same-object detection.
 
-    - sameObject: CLIP similarity >= 0.85
+    - sameObject: DINOv2 similarity >= threshold
     - isBlurry: Laplacian variance below threshold (null if different object)
     - isBright: brightness within acceptable range (null if different object)
     - isAligned: enough keypoint matches for good comparison (null if different object)
@@ -63,35 +63,34 @@ async def verify_same_object(request: VerifyRequest):
     # Decode patrol image from base64
     image2 = _decode_base64_image(request.image_base64_2, "imageBase64_2")
 
-    # Step 1: CLIP same-object check
     pipeline = get_pipeline()
     pipeline._ensure_models()
 
-    if pipeline._clip_model is None or pipeline._clip_processor is None:
-        logger.error("CLIP model not loaded — verify returning sameObject=false as safety default")
+    # ── DINOv2 same-object check ──
+    if pipeline._dino_model is None:
+        logger.error("DINOv2 not loaded — verify returning sameObject=false as safety default")
         return VerifyResponse(same_object=False)
 
-    fraud_result = pipeline._run_m2_fraud(image1, image2)
+    score = pipeline._compute_dino_similarity(image1, image2)
+    same = score >= config.VERIFY_THRESHOLD_DINO
 
-    score = fraud_result["score"]
-    same = score >= config.VERIFY_THRESHOLD
+    logger.info(f"Verify: DINOv2 similarity={score:.4f} sameObject={same}")
 
-    logger.info(f"Verify: similarity={score:.4f} sameObject={same}")
-
-    # If different object, return nulls for quality checks
     if not same:
         return VerifyResponse(same_object=False)
 
-    # Step 2: Blur check on patrol image (image2)
+    # ── Quality checks (only if same object) ──
+
+    # Blur check on patrol image
     gray2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
     blur_score = cv2.Laplacian(gray2, cv2.CV_64F).var()
     is_blurry = blur_score < config.BLUR_WARNING_THRESHOLD
 
-    # Step 3: Brightness check on patrol image (image2)
+    # Brightness check on patrol image
     brightness = float(gray2.mean())
     is_bright = brightness >= config.BRIGHTNESS_WARNING_THRESHOLD
 
-    # Step 4: Alignment check (quick keypoint matching)
+    # Alignment check (quick keypoint matching)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced1 = clahe.apply(cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY))
     enhanced2 = clahe.apply(gray2)

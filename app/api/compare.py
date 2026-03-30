@@ -145,6 +145,9 @@ async def create_comparison(
     comparison.max_hue_shift = pipeline_result.max_hue_shift
     comparison.max_delta_e = pipeline_result.max_delta_e
 
+    # DINOv2
+    comparison.dino_similarity = pipeline_result.dino_similarity
+
     # Alignment
     comparison.alignment_inliers = pipeline_result.alignment_inliers
     comparison.alignment_method = pipeline_result.alignment_method

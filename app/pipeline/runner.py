@@ -88,6 +88,9 @@ class PipelineResult:
     max_hue_shift: float = 0.0
     max_delta_e: float = 0.0
 
+    # DINOv2 similarity
+    dino_similarity: float = 0.0
+
     # M5: Classification
     ratio: float = 0.0
 
@@ -114,6 +117,7 @@ class PipelineRunner:
         self._models_loaded = False
         self._clip_model = None
         self._clip_processor = None
+        self._dino_model = None
         self._lg_extractor = None
         self._lg_matcher = None
         self._svm_model = None
@@ -155,6 +159,17 @@ class PipelineRunner:
             logger.info("CLIP ViT-B/32 loaded")
         except Exception as e:
             logger.warning(f"CLIP load failed (M2 will use fallback): {e}")
+
+        # ── Load DINOv2 (Verify: Same-object check + Compare: RF feature) ──
+        try:
+            import timm
+            self._dino_model = timm.create_model(
+                "vit_small_patch14_dinov2.lvd142m", pretrained=True, num_classes=0
+            )
+            self._dino_model.eval().to(self._device)
+            logger.info(f"DINOv2 ViT-S/14 loaded on {self._device}")
+        except Exception as e:
+            logger.warning(f"DINOv2 load failed: {e}")
 
         # ── Load SuperPoint + LightGlue (M3: Alignment) ──
         try:
@@ -344,6 +359,13 @@ class PipelineRunner:
             result.max_hue_shift = color_features["max_hue_shift"]
             result.max_delta_e = color_features["max_delta_e"]
 
+            # ── DINOv2 Similarity (semantic feature for RF) ──
+            result.dino_similarity = self._compute_dino_similarity(
+                baseline_color if baseline_color is not None else baseline_image,
+                patrol_image
+            )
+            logger.info(f"DINOv2 similarity: {result.dino_similarity:.4f}")
+
             # ── M5: Classification ──
             self._load_rf_model()
 
@@ -360,6 +382,7 @@ class PipelineRunner:
                     "max_hue_shift": color_features["max_hue_shift"],
                     "max_delta_e": color_features["max_delta_e"],
                     "alignment_inliers": float(result.alignment_inliers or 0),
+                    "dino_similarity": float(result.dino_similarity),
                 }
                 feature_vector = [feature_values[f] for f in self._rf_feature_names]
                 features_array = np.array(feature_vector).reshape(1, -1)
@@ -613,6 +636,54 @@ class PipelineRunner:
         except Exception as e:
             logger.error(f"CLIP fraud detection error: {e}")
             return {"is_valid": True, "score": 1.0}
+
+    # ─────────────────────────────────────────
+    #  DINOv2 Similarity (Verify + Compare)
+    # ─────────────────────────────────────────
+
+    def _compute_dino_similarity(self, image1: np.ndarray, image2: np.ndarray) -> float:
+        """Compute DINOv2 cosine similarity between two images.
+
+        Used by:
+        - Verify endpoint: same-object check (threshold-based)
+        - Compare pipeline: RF feature (dino_similarity)
+
+        Returns cosine similarity (0.0 to 1.0). Higher = more similar.
+        """
+        if self._dino_model is None:
+            logger.warning("DINOv2 not loaded, returning 0.0")
+            return 0.0
+
+        try:
+            import torch
+            from PIL import Image
+            from torchvision import transforms
+
+            # DINOv2 ViT-S/14 expects 518x518 normalized images
+            transform = transforms.Compose([
+                transforms.Resize((518, 518)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ])
+
+            pil1 = Image.fromarray(cv2.cvtColor(image1, cv2.COLOR_BGR2RGB))
+            pil2 = Image.fromarray(cv2.cvtColor(image2, cv2.COLOR_BGR2RGB))
+
+            t1 = transform(pil1).unsqueeze(0).to(self._device)
+            t2 = transform(pil2).unsqueeze(0).to(self._device)
+
+            with torch.no_grad():
+                feat1 = self._dino_model(t1)
+                feat2 = self._dino_model(t2)
+
+            similarity = float(torch.nn.functional.cosine_similarity(feat1, feat2).item())
+            logger.debug(f"DINOv2 similarity: {similarity:.4f}")
+            return round(similarity, 6)
+
+        except Exception as e:
+            logger.error(f"DINOv2 similarity error: {e}")
+            return 0.0
 
     # ─────────────────────────────────────────
     #  Object Category Classification (CLIP)

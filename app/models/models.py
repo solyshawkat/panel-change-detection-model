@@ -78,6 +78,9 @@ class Comparison(Base):
     max_hue_shift = Column(Float, nullable=True)
     max_delta_e = Column(Float, nullable=True)
 
+    # -- DINOv2 Similarity --
+    dino_similarity = Column(Float, nullable=True)
+
     # -- Alignment (M3) --
     alignment_inliers = Column(Integer, nullable=True)
     alignment_method = Column(String(20), nullable=True)  # lightglue | orb
