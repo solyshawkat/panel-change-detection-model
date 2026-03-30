@@ -591,17 +591,15 @@ class PipelineRunner:
                 images=[pil_base, pil_patrol], return_tensors="pt", padding=True
             )
             with torch.no_grad():
-                outputs = self._clip_model.get_image_features(**inputs)
-                # Handle both old (raw tensor) and new (BaseModelOutput) transformers versions
-                if hasattr(outputs, 'pooler_output'):
-                    features = outputs.pooler_output
-                elif hasattr(outputs, 'last_hidden_state'):
-                    features = outputs.last_hidden_state[:, 0, :]
-                elif isinstance(outputs, torch.Tensor):
-                    features = outputs
-                else:
-                    # Last resort: try indexing like a tensor
-                    features = outputs[0] if hasattr(outputs, '__getitem__') else outputs
+                # Run vision model explicitly to get pooled output, then project
+                # This works identically across all transformers versions
+                vision_outputs = self._clip_model.vision_model(
+                    pixel_values=inputs.get("pixel_values")
+                )
+                # Get pooled output (CLS token)
+                pooled = vision_outputs.pooler_output  # shape: (batch, hidden_dim)
+                # Apply visual projection to get CLIP embedding space
+                features = self._clip_model.visual_projection(pooled)  # shape: (batch, projection_dim)
                 features = features / torch.norm(features, dim=-1, keepdim=True)
 
             score = float(torch.cosine_similarity(features[0:1], features[1:2]).item())
