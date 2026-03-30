@@ -404,11 +404,10 @@ class PipelineRunner:
                 result.ratio = ratio
                 logger.info(f"M5 RF: ratio={result.ratio}")
             else:
-                # Path B: Alignment-aware formula (no trained model yet)
-                # Two paths based on alignment quality:
-                #   Good alignment → pixel metrics are reliable (SSIM, edge)
-                #   Poor alignment → use hash-based metrics (more robust)
-                logger.debug("M5: Using alignment-aware pixel formula")
+                # Path B: Alignment-aware formula with DINOv2 (no trained model yet)
+                # DINOv2 provides semantic similarity: high = same object, low = different
+                # dino_change = 1 - dino_sim: 0 = identical, 1 = completely different
+                logger.debug("M5: Using alignment-aware pixel formula + DINOv2")
                 inliers = result.alignment_inliers or 0
 
                 ssim = structure_features["ssim"]
@@ -416,31 +415,24 @@ class PipelineRunner:
                 hist = structure_features["histogram"]
                 cluster = structure_features["cluster"]
                 max_diff = structure_features["max_diff_area"]
+                dino_change = 1.0 - (result.dino_similarity or 0.0)
 
                 if inliers >= 30:
-                    # Good alignment: pixel metrics are trustworthy
-                    aligned_ratio = (
-                        0.45 * ssim
-                        + 0.30 * edge
-                        + 0.25 * hist
-                    )
-                    # Also compute hash-based ratio as a ceiling
-                    hash_ratio = (
-                        0.45 * ssim
-                        + 0.35 * hist
-                        + 0.20 * cluster
-                    )
-                    # Take minimum: if alignment helped, aligned < hash
-                    # If images are truly different, both are high
-                    ratio = min(aligned_ratio, hash_ratio)
-                else:
-                    # Poor alignment: SSIM/edge inflated by perspective
-                    # Use histogram + cluster (alignment-independent)
+                    # Good alignment: pixel metrics + DINOv2 semantic check
                     ratio = (
-                        0.45 * hist
-                        + 0.25 * cluster
-                        + 0.20 * max_diff
+                        0.35 * ssim
+                        + 0.20 * edge
+                        + 0.20 * hist
+                        + 0.25 * dino_change
+                    )
+                else:
+                    # Poor alignment: histogram-dominant + DINOv2 semantic check
+                    ratio = (
+                        0.30 * hist
+                        + 0.15 * cluster
+                        + 0.15 * max_diff
                         + 0.10 * ssim
+                        + 0.30 * dino_change
                     )
 
                 # CLIP floor: if CLIP says truly different object,
