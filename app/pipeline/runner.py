@@ -592,7 +592,7 @@ class PipelineRunner:
             )
             with torch.no_grad():
                 features = self._clip_model.get_image_features(**inputs)
-                features = features / features.norm(dim=-1, keepdim=True)
+                features = features / torch.norm(features, dim=-1, keepdim=True)
 
             score = float(torch.cosine_similarity(features[0:1], features[1:2]).item())
             threshold = config.FRAUD_THRESHOLD
