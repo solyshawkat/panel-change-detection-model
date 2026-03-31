@@ -147,6 +147,9 @@ async def create_comparison(
 
     # DINOv2
     comparison.dino_similarity = pipeline_result.dino_similarity
+    comparison.dino_patch_changed_fraction = pipeline_result.dino_patch_changed_fraction
+    comparison.dino_patch_max_region = pipeline_result.dino_patch_max_region
+    comparison.dino_patch_mean = pipeline_result.dino_patch_mean
 
     # Alignment
     comparison.alignment_inliers = pipeline_result.alignment_inliers

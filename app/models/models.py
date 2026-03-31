@@ -80,6 +80,10 @@ class Comparison(Base):
 
     # -- DINOv2 Similarity --
     dino_similarity = Column(Float, nullable=True)
+    # -- DINOv2 Patch-Level Features --
+    dino_patch_changed_fraction = Column(Float, nullable=True)
+    dino_patch_max_region = Column(Float, nullable=True)
+    dino_patch_mean = Column(Float, nullable=True)
 
     # -- Alignment (M3) --
     alignment_inliers = Column(Integer, nullable=True)

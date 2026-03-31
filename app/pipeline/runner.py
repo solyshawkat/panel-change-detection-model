@@ -91,6 +91,12 @@ class PipelineResult:
     # DINOv2 similarity
     dino_similarity: float = 0.0
 
+    # DINOv2 patch-level features
+    dino_patch_changed_fraction: float = 0.0
+    dino_patch_max_region: float = 0.0
+    dino_patch_mean: float = 0.0
+    dino_patch_similarity_map: Optional[np.ndarray] = None  # internal, not serialized
+
     # M5: Classification
     ratio: float = 0.0
 
@@ -359,6 +365,30 @@ class PipelineRunner:
             )
             logger.info(f"DINOv2 similarity: {result.dino_similarity:.4f}")
 
+            # ── DINOv2 Patch-Level Similarity (localized change detection) ──
+            # Warp color patrol image using homography from M3
+            baseline_color_img = baseline_color if baseline_color is not None else baseline_image
+            H = alignment_result.get("homography")
+            if H is not None:
+                bh, bw = baseline_color_img.shape[:2]
+                patrol_color_resized = cv2.resize(patrol_image, (bw, bh))
+                patrol_color_warped = cv2.warpPerspective(patrol_color_resized, H, (bw, bh))
+            else:
+                bh, bw = baseline_color_img.shape[:2]
+                patrol_color_warped = cv2.resize(patrol_image, (bw, bh))
+
+            patch_result = self._compute_dino_patch_similarity(
+                baseline_color_img, patrol_color_warped
+            )
+            result.dino_patch_changed_fraction = patch_result["changed_fraction"]
+            result.dino_patch_max_region = patch_result["max_region"]
+            result.dino_patch_mean = patch_result["mean"]
+            result.dino_patch_similarity_map = patch_result["patch_similarity_map"]
+            logger.info(
+                f"DINOv2 patches: changed_frac={result.dino_patch_changed_fraction:.3f} "
+                f"max_region={result.dino_patch_max_region:.3f} mean={result.dino_patch_mean:.3f}"
+            )
+
             # ── M5: Classification ──
             self._load_rf_model()
 
@@ -376,6 +406,9 @@ class PipelineRunner:
                     "max_delta_e": color_features["max_delta_e"],
                     "alignment_inliers": float(result.alignment_inliers or 0),
                     "dino_similarity": float(result.dino_similarity),
+                    "dino_patch_changed_fraction": float(result.dino_patch_changed_fraction),
+                    "dino_patch_max_region": float(result.dino_patch_max_region),
+                    "dino_patch_mean": float(result.dino_patch_mean),
                 }
                 feature_vector = [feature_values[f] for f in self._rf_feature_names]
                 features_array = np.array(feature_vector).reshape(1, -1)
@@ -384,10 +417,8 @@ class PipelineRunner:
                 result.ratio = ratio
                 logger.info(f"M5 RF: ratio={result.ratio}")
             else:
-                # Path B: Alignment-aware formula with DINOv2 (no trained model yet)
-                # DINOv2 provides semantic similarity: high = same object, low = different
-                # dino_change = 1 - dino_sim: 0 = identical, 1 = completely different
-                logger.debug("M5: Using alignment-aware pixel formula + DINOv2")
+                # Path B: Alignment-aware formula with DINOv2 + patch-level signals
+                logger.debug("M5: Using alignment-aware pixel formula + DINOv2 patches")
                 inliers = result.alignment_inliers or 0
 
                 ssim = structure_features["ssim"]
@@ -396,31 +427,36 @@ class PipelineRunner:
                 cluster = structure_features["cluster"]
                 max_diff = structure_features["max_diff_area"]
                 dino_change = 1.0 - (result.dino_similarity or 0.0)
+                changed_frac = result.dino_patch_changed_fraction
+                max_region = result.dino_patch_max_region
+                patch_mean = result.dino_patch_mean
 
                 if inliers >= 30:
-                    # Good alignment: pixel metrics + DINOv2 semantic check
+                    # Good alignment: pixel metrics + patch semantic signals
                     ratio = (
-                        0.35 * ssim
-                        + 0.20 * edge
-                        + 0.20 * hist
-                        + 0.25 * dino_change
+                        0.30 * ssim
+                        + 0.15 * edge
+                        + 0.15 * hist
+                        + 0.10 * dino_change
+                        + 0.15 * changed_frac
+                        + 0.15 * max_region
                     )
                 else:
-                    # Poor alignment: histogram-dominant + DINOv2 semantic check
+                    # Poor alignment: patch signals more reliable than pixel metrics
                     ratio = (
-                        0.30 * hist
-                        + 0.15 * cluster
-                        + 0.15 * max_diff
-                        + 0.10 * ssim
-                        + 0.30 * dino_change
+                        0.15 * hist
+                        + 0.05 * ssim
+                        + 0.10 * dino_change
+                        + 0.30 * changed_frac
+                        + 0.25 * max_region
+                        + 0.15 * patch_mean
                     )
 
-                # CLIP floor: if CLIP says truly different object,
-                # enforce minimum ratio regardless of pixel metrics.
                 result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
                 logger.info(
                     f"M5 pixel: ratio={result.ratio} inliers={inliers} "
-                    f"ssim={ssim:.3f} edge={edge:.3f} hist={hist:.3f}"
+                    f"ssim={ssim:.3f} edge={edge:.3f} hist={hist:.3f} "
+                    f"patch_frac={changed_frac:.3f} patch_region={max_region:.3f}"
                 )
 
             # Generate heatmap only when ratio >= 10% (skip for clearly identical panels)
@@ -428,6 +464,7 @@ class PipelineRunner:
                 heatmap_path = self._generate_heatmap(
                     baseline_enhanced, patrol_warped,
                     structure_features.get("ssim_diff"),
+                    patch_similarity_map=result.dino_patch_similarity_map,
                 )
                 result.heatmap_path = heatmap_path
             else:
@@ -648,6 +685,104 @@ class PipelineRunner:
             logger.error(f"DINOv2 similarity error: {e}")
             return 0.0
 
+    def _compute_dino_patch_similarity(
+        self, image1: np.ndarray, image2: np.ndarray
+    ) -> dict:
+        """Compute per-patch DINOv2 cosine similarity between two aligned images.
+
+        Uses forward_features() to extract spatial patch tokens (CLS + patches),
+        strips CLS, reshapes to spatial grid, computes per-patch cosine similarity.
+
+        Images should be aligned (warped) before calling this method.
+
+        Returns dict with:
+            - patch_similarity_map: np.ndarray shape (grid, grid), values 0-1
+            - changed_fraction: fraction of patches with change > 0.3
+            - max_region: largest connected changed region / total patches
+            - mean: mean patch change score
+        """
+        if self._dino_model is None:
+            logger.warning("DINOv2 not loaded, returning defaults")
+            return {
+                "patch_similarity_map": None,
+                "changed_fraction": 0.0,
+                "max_region": 0.0,
+                "mean": 0.0,
+            }
+
+        try:
+            import torch
+            from PIL import Image
+            from torchvision import transforms
+            from scipy import ndimage
+
+            transform = transforms.Compose([
+                transforms.Resize((518, 518)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ])
+
+            pil1 = Image.fromarray(cv2.cvtColor(image1, cv2.COLOR_BGR2RGB))
+            pil2 = Image.fromarray(cv2.cvtColor(image2, cv2.COLOR_BGR2RGB))
+
+            t1 = transform(pil1).unsqueeze(0).to(self._device)
+            t2 = transform(pil2).unsqueeze(0).to(self._device)
+
+            with torch.no_grad():
+                feat1 = self._dino_model.forward_features(t1)  # (1, 1370, 384)
+                feat2 = self._dino_model.forward_features(t2)
+
+            # Strip CLS token, keep patch tokens
+            p1 = feat1[:, 1:, :]  # (1, 1369, 384)
+            p2 = feat2[:, 1:, :]
+
+            # L2 normalize
+            p1 = torch.nn.functional.normalize(p1, dim=2)
+            p2 = torch.nn.functional.normalize(p2, dim=2)
+
+            # Per-patch cosine similarity
+            sim = (p1 * p2).sum(dim=2).squeeze(0)  # (1369,)
+
+            # Reshape to spatial grid
+            grid_size = int(np.sqrt(sim.shape[0]))
+            sim_map = sim.cpu().numpy().reshape(grid_size, grid_size)
+            change_map = 1.0 - sim_map
+
+            # Patch metrics
+            changed_mask = change_map > 0.3
+            changed_fraction = float(changed_mask.sum()) / change_map.size
+
+            if changed_mask.any():
+                labeled, n_labels = ndimage.label(changed_mask)
+                region_sizes = ndimage.sum(changed_mask, labeled, range(1, n_labels + 1))
+                max_region = float(max(region_sizes)) / change_map.size if len(region_sizes) > 0 else 0.0
+            else:
+                max_region = 0.0
+
+            mean_change = float(change_map.mean())
+
+            logger.debug(
+                f"DINOv2 patches: changed_frac={changed_fraction:.3f} "
+                f"max_region={max_region:.3f} mean={mean_change:.3f}"
+            )
+
+            return {
+                "patch_similarity_map": sim_map,
+                "changed_fraction": round(changed_fraction, 6),
+                "max_region": round(max_region, 6),
+                "mean": round(mean_change, 6),
+            }
+
+        except Exception as e:
+            logger.error(f"DINOv2 patch similarity error: {e}")
+            return {
+                "patch_similarity_map": None,
+                "changed_fraction": 0.0,
+                "max_region": 0.0,
+                "mean": 0.0,
+            }
+
     # ─────────────────────────────────────────
     #  Object Category Classification (CLIP)
     # ─────────────────────────────────────────
@@ -732,24 +867,24 @@ class PipelineRunner:
         Returns dict with 'warped', 'inliers', 'method', 'mask'.
         """
         # Try LightGlue first
-        warped, inliers, method, mask, scale = self._align_lightglue(
+        warped, inliers, method, mask, scale, H = self._align_lightglue(
             baseline_enhanced, patrol_enhanced
         )
         if warped is not None:
-            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale}
+            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale, "homography": H}
 
         # Fallback to ORB
-        warped, inliers, method, mask, scale = self._align_orb(
+        warped, inliers, method, mask, scale, H = self._align_orb(
             baseline_enhanced, patrol_enhanced
         )
         if warped is not None:
-            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale}
+            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale, "homography": H}
 
         # Worst case: just resize patrol to match baseline
         h, w = baseline_enhanced.shape[:2]
         resized = cv2.resize(patrol_enhanced, (w, h))
         mask = np.ones((h, w), dtype=np.uint8) * 255
-        return {"warped": resized, "inliers": 0, "method": "resize_only", "mask": mask, "scale": 1.0}
+        return {"warped": resized, "inliers": 0, "method": "resize_only", "mask": mask, "scale": 1.0, "homography": None}
 
     def _align_lightglue(
         self, ref_enhanced: np.ndarray, patrol_enhanced: np.ndarray
@@ -757,7 +892,7 @@ class PipelineRunner:
         """Align patrol to reference using LightGlue + SuperPoint."""
         if self._lg_extractor is None or self._lg_matcher is None:
             logger.debug("LightGlue not loaded, skipping")
-            return None, 0, "lightglue_not_loaded", None
+            return None, 0, "lightglue_not_loaded", None, 1.0, None
 
         try:
             import torch
@@ -789,12 +924,12 @@ class PipelineRunner:
                     ransac_inliers = int(ransac_mask.sum()) if ransac_mask is not None else n_inliers
                     scale = float(np.sqrt(abs(np.linalg.det(H[:2, :2]))))
                     mask = self._create_warp_mask(warped)
-                    return warped, ransac_inliers, "lightglue", mask, scale
+                    return warped, ransac_inliers, "lightglue", mask, scale, H
 
-            return None, n_inliers, "lightglue_failed", None, 1.0
+            return None, n_inliers, "lightglue_failed", None, 1.0, None
         except Exception as e:
             logger.warning(f"LightGlue alignment error: {e}")
-            return None, 0, "lightglue_error", None, 1.0
+            return None, 0, "lightglue_error", None, 1.0, None
 
     def _align_orb(
         self, ref_enhanced: np.ndarray, patrol_enhanced: np.ndarray
@@ -809,7 +944,7 @@ class PipelineRunner:
             kp2, des2 = orb.detectAndCompute(patrol_resized, None)
 
             if des1 is None or des2 is None:
-                return None, 0, "orb_failed", None
+                return None, 0, "orb_failed", None, 1.0, None
 
             bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
             matches = bf.match(des1, des2)
@@ -824,12 +959,12 @@ class PipelineRunner:
                     inliers = int(ransac_mask.sum()) if ransac_mask is not None else len(good)
                     scale = float(np.sqrt(abs(np.linalg.det(H[:2, :2]))))
                     mask = self._create_warp_mask(warped)
-                    return warped, inliers, "orb", mask, scale
+                    return warped, inliers, "orb", mask, scale, H
 
-            return None, len(good), "orb_failed", None, 1.0
+            return None, len(good), "orb_failed", None, 1.0, None
         except Exception as e:
             logger.warning(f"ORB alignment error: {e}")
-            return None, 0, "orb_error", None, 1.0
+            return None, 0, "orb_error", None, 1.0, None
 
     @staticmethod
     def _create_warp_mask(warped: np.ndarray) -> np.ndarray:
@@ -1213,17 +1348,32 @@ class PipelineRunner:
         baseline: np.ndarray,
         patrol: np.ndarray,
         ssim_diff_map: Optional[np.ndarray] = None,
+        patch_similarity_map: Optional[np.ndarray] = None,
     ) -> Optional[str]:
-        """Generate SSIM-based diff heatmap and save to disk."""
+        """Generate diff heatmap blending SSIM and DINOv2 patch signals."""
         try:
+            h, w = baseline.shape[:2]
+
+            # SSIM-based heatmap
             if ssim_diff_map is not None:
-                # Use SSIM diff map for better heatmap quality
                 change_map = 1.0 - ssim_diff_map
-                change_uint8 = (change_map * 255).astype(np.uint8)
-                heatmap = cv2.applyColorMap(change_uint8, cv2.COLORMAP_JET)
+                ssim_uint8 = (np.clip(change_map, 0, 1) * 255).astype(np.uint8)
+                ssim_heatmap = cv2.applyColorMap(ssim_uint8, cv2.COLORMAP_JET)
             else:
                 diff = cv2.absdiff(baseline, patrol)
-                heatmap = cv2.applyColorMap(diff, cv2.COLORMAP_JET)
+                ssim_heatmap = cv2.applyColorMap(diff, cv2.COLORMAP_JET)
+
+            # Blend with DINOv2 patch heatmap if available
+            if patch_similarity_map is not None:
+                patch_change = 1.0 - patch_similarity_map
+                patch_up = cv2.resize(patch_change.astype(np.float32), (w, h),
+                                      interpolation=cv2.INTER_LINEAR)
+                patch_up = cv2.GaussianBlur(patch_up, (31, 31), 0)
+                patch_uint8 = (np.clip(patch_up, 0, 1) * 255).astype(np.uint8)
+                patch_heatmap = cv2.applyColorMap(patch_uint8, cv2.COLORMAP_JET)
+                heatmap = cv2.addWeighted(ssim_heatmap, 0.5, patch_heatmap, 0.5, 0)
+            else:
+                heatmap = ssim_heatmap
 
             baseline_bgr = cv2.cvtColor(baseline, cv2.COLOR_GRAY2BGR)
             overlay = cv2.addWeighted(baseline_bgr, 0.5, heatmap, 0.5, 0)
