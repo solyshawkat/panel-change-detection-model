@@ -732,24 +732,24 @@ class PipelineRunner:
         Returns dict with 'warped', 'inliers', 'method', 'mask'.
         """
         # Try LightGlue first
-        warped, inliers, method, mask = self._align_lightglue(
+        warped, inliers, method, mask, scale = self._align_lightglue(
             baseline_enhanced, patrol_enhanced
         )
         if warped is not None:
-            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask}
+            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale}
 
         # Fallback to ORB
-        warped, inliers, method, mask = self._align_orb(
+        warped, inliers, method, mask, scale = self._align_orb(
             baseline_enhanced, patrol_enhanced
         )
         if warped is not None:
-            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask}
+            return {"warped": warped, "inliers": inliers, "method": method, "mask": mask, "scale": scale}
 
         # Worst case: just resize patrol to match baseline
         h, w = baseline_enhanced.shape[:2]
         resized = cv2.resize(patrol_enhanced, (w, h))
         mask = np.ones((h, w), dtype=np.uint8) * 255
-        return {"warped": resized, "inliers": 0, "method": "resize_only", "mask": mask}
+        return {"warped": resized, "inliers": 0, "method": "resize_only", "mask": mask, "scale": 1.0}
 
     def _align_lightglue(
         self, ref_enhanced: np.ndarray, patrol_enhanced: np.ndarray
@@ -787,13 +787,14 @@ class PipelineRunner:
                 if H is not None:
                     warped = cv2.warpPerspective(patrol_resized, H, (w, h))
                     ransac_inliers = int(ransac_mask.sum()) if ransac_mask is not None else n_inliers
+                    scale = float(np.sqrt(abs(np.linalg.det(H[:2, :2]))))
                     mask = self._create_warp_mask(warped)
-                    return warped, ransac_inliers, "lightglue", mask
+                    return warped, ransac_inliers, "lightglue", mask, scale
 
-            return None, n_inliers, "lightglue_failed", None
+            return None, n_inliers, "lightglue_failed", None, 1.0
         except Exception as e:
             logger.warning(f"LightGlue alignment error: {e}")
-            return None, 0, "lightglue_error", None
+            return None, 0, "lightglue_error", None, 1.0
 
     def _align_orb(
         self, ref_enhanced: np.ndarray, patrol_enhanced: np.ndarray
@@ -821,13 +822,14 @@ class PipelineRunner:
                 if H is not None:
                     warped = cv2.warpPerspective(patrol_resized, H, (w, h))
                     inliers = int(ransac_mask.sum()) if ransac_mask is not None else len(good)
+                    scale = float(np.sqrt(abs(np.linalg.det(H[:2, :2]))))
                     mask = self._create_warp_mask(warped)
-                    return warped, inliers, "orb", mask
+                    return warped, inliers, "orb", mask, scale
 
-            return None, len(good), "orb_failed", None
+            return None, len(good), "orb_failed", None, 1.0
         except Exception as e:
             logger.warning(f"ORB alignment error: {e}")
-            return None, 0, "orb_error", None
+            return None, 0, "orb_error", None, 1.0
 
     @staticmethod
     def _create_warp_mask(warped: np.ndarray) -> np.ndarray:

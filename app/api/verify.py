@@ -96,11 +96,12 @@ async def verify_same_object(request: VerifyRequest):
     enhanced2 = clahe.apply(gray2)
     alignment_result = pipeline._run_m3_alignment(enhanced1, enhanced2)
     inliers = alignment_result["inliers"]
-    is_aligned = inliers >= 30
+    scale = alignment_result.get("scale", 1.0)
+    is_aligned = inliers >= 30 and 0.4 <= scale <= 2.5
 
     logger.info(
         f"Verify quality: blur={blur_score:.0f} brightness={brightness:.0f} "
-        f"inliers={inliers} blurry={is_blurry} bright={is_bright} aligned={is_aligned}"
+        f"inliers={inliers} scale={scale:.2f} blurry={is_blurry} bright={is_bright} aligned={is_aligned}"
     )
 
     return VerifyResponse(
