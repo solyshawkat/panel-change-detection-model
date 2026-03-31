@@ -297,21 +297,14 @@ class PipelineRunner:
             # Color analysis runs on original color images, not grayscale
             # Results feed into M4 features
 
-            # ── M2: Fraud Detection (CLIP) ──
-            logger.debug("M2: Fraud Detection (CLIP)")
-            fraud_result = self._run_m2_fraud(baseline_image, patrol_image)
-            result.is_valid = fraud_result["is_valid"]
-            result.fraud_score = fraud_result["score"]
-
-            if not result.is_valid:
-                result.stopped_at = "M2_FRAUD"
-                result.error = f"Fraud detected: CLIP score {result.fraud_score:.3f} below threshold {config.FRAUD_THRESHOLD}"
-                result.object_category = self._classify_object(baseline_image)
-                result.processing_ms = int((time.time() - start_time) * 1000)
-                return result
-
-            # ── Object Classification (reuses CLIP, no extra model load) ──
+            # ── M2: Object Classification (CLIP) ──
+            # CLIP no longer blocks the pipeline — DINOv2 verify handles
+            # same-object detection before compare is called.
+            # CLIP only classifies the object category for DB storage.
+            logger.debug("M2: Object Classification (CLIP)")
             result.object_category = self._classify_object(baseline_image)
+            result.is_valid = True
+            result.fraud_score = 0.0
 
             # ── M3: Alignment ──
             logger.debug("M3: Image Alignment")
@@ -388,19 +381,6 @@ class PipelineRunner:
                 features_array = np.array(feature_vector).reshape(1, -1)
                 probability = float(self._rf_classifier.predict_proba(features_array)[0][1])
                 ratio = round(min(max(probability, 0.0), 1.0), 4)
-
-                # CLIP floor safety net: if CLIP says truly different
-                # object, enforce minimum ratio even after RF prediction
-                clip_sim = result.fraud_score
-                if clip_sim and clip_sim < 0.80:
-                    clip_floor = 0.50
-                    if ratio < clip_floor:
-                        logger.debug(
-                            f"CLIP floor override: RF={ratio}, "
-                            f"CLIP sim={clip_sim:.3f}, floor={clip_floor}"
-                        )
-                        ratio = clip_floor
-
                 result.ratio = ratio
                 logger.info(f"M5 RF: ratio={result.ratio}")
             else:
@@ -437,15 +417,6 @@ class PipelineRunner:
 
                 # CLIP floor: if CLIP says truly different object,
                 # enforce minimum ratio regardless of pixel metrics.
-                clip_sim = result.fraud_score
-                if clip_sim and clip_sim < 0.80:
-                    clip_floor = 0.50
-                    ratio = max(ratio, clip_floor)
-                    logger.debug(
-                        f"CLIP floor: sim={clip_sim:.3f}, "
-                        f"floor={clip_floor}, ratio={ratio:.4f}"
-                    )
-
                 result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
                 logger.info(
                     f"M5 pixel: ratio={result.ratio} inliers={inliers} "
