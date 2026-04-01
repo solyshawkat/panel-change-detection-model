@@ -324,6 +324,14 @@ class PipelineRunner:
                 result.processing_ms = int((time.time() - start_time) * 1000)
                 return result
 
+            # Scale gate: reject extreme framing differences (same as verify)
+            scale = alignment_result.get("scale", 1.0)
+            if not (0.4 <= scale <= 2.5):
+                result.stopped_at = "M3_ALIGNMENT"
+                result.error = f"Alignment failed: scale={scale:.2f} outside 0.4-2.5 range (extreme framing difference)"
+                result.processing_ms = int((time.time() - start_time) * 1000)
+                return result
+
             patrol_warped = alignment_result["warped"]
             warp_mask = alignment_result["mask"]
 
@@ -377,8 +385,18 @@ class PipelineRunner:
                 bh, bw = baseline_color_img.shape[:2]
                 patrol_color_warped = cv2.resize(patrol_image, (bw, bh))
 
+            # Generate warp mask for color warped image (exclude black borders)
+            color_warp_mask = None
+            if H is not None:
+                color_warp_mask = self._create_warp_mask(
+                    cv2.cvtColor(patrol_color_warped, cv2.COLOR_BGR2GRAY)
+                    if len(patrol_color_warped.shape) == 3
+                    else patrol_color_warped
+                )
+
             patch_result = self._compute_dino_patch_similarity(
-                baseline_color_img, patrol_color_warped
+                baseline_color_img, patrol_color_warped,
+                warp_mask=color_warp_mask,
             )
             result.dino_patch_changed_fraction = patch_result["changed_fraction"]
             result.dino_patch_max_region = patch_result["max_region"]
@@ -693,12 +711,14 @@ class PipelineRunner:
             return 0.0
 
     def _compute_dino_patch_similarity(
-        self, image1: np.ndarray, image2: np.ndarray
+        self, image1: np.ndarray, image2: np.ndarray,
+        warp_mask: Optional[np.ndarray] = None,
     ) -> dict:
         """Compute per-patch DINOv2 cosine similarity between two aligned images.
 
         Uses forward_features() to extract spatial patch tokens (CLS + patches),
         strips CLS, reshapes to spatial grid, computes per-patch cosine similarity.
+        Optionally applies warp_mask to exclude invalid (black border) patches.
 
         Images should be aligned (warped) before calling this method.
 
@@ -753,12 +773,17 @@ class PipelineRunner:
             g1 = p1.squeeze(0).cpu().numpy().reshape(grid_size, grid_size, -1)
             g2 = p2.squeeze(0).cpu().numpy().reshape(grid_size, grid_size, -1)
 
-            # 3x3 neighborhood matching: each baseline patch (i,j) finds best
-            # cosine similarity in a 3x3 window around (i,j) in patrol.
-            # This absorbs residual misalignment from imperfect homography.
-            sim_map = np.zeros((grid_size, grid_size), dtype=np.float32)
+            # Dual matching: exact position + 3x3 neighborhood noise floor.
+            # - exact_sim: cosine similarity at the same grid position
+            # - neighbor_sim: best cosine similarity in a 3x3 window (absorbs misalignment)
+            # - Final change = exact change, but floored by neighbor change.
+            #   If exact says "changed" but neighbor says "fine", it's just misalignment.
+            #   If both say "changed", it's a real change.
+            exact_sim = np.zeros((grid_size, grid_size), dtype=np.float32)
+            neighbor_sim = np.zeros((grid_size, grid_size), dtype=np.float32)
             for i in range(grid_size):
                 for j in range(grid_size):
+                    exact_sim[i, j] = float(np.dot(g1[i, j], g2[i, j]))
                     best_sim = -1.0
                     for di in range(-1, 2):
                         for dj in range(-1, 2):
@@ -767,9 +792,32 @@ class PipelineRunner:
                                 s = float(np.dot(g1[i, j], g2[ni, nj]))
                                 if s > best_sim:
                                     best_sim = s
-                    sim_map[i, j] = best_sim
+                    neighbor_sim[i, j] = best_sim
 
-            change_map = 1.0 - sim_map
+            # Change map: use neighbor-adjusted scoring.
+            # neighbor_change is the noise floor (misalignment absorbed).
+            # exact_change captures real changes + misalignment noise.
+            # Final change = exact_change where neighbor also confirms change,
+            # otherwise use neighbor_change (which is lower, absorbing noise).
+            exact_change = 1.0 - exact_sim
+            neighbor_change = 1.0 - neighbor_sim
+            # Use the max of neighbor_change and a dampened exact_change.
+            # Where neighbor finds a good match (low change), trust that.
+            # Where neighbor also fails (high change), trust exact.
+            change_map = np.where(
+                neighbor_change > 0.15,  # neighbor also sees change
+                exact_change,            # trust exact (real change)
+                neighbor_change          # trust neighbor (was just misalignment)
+            )
+
+            # Warp validity mask: exclude black-border patches from scoring.
+            # Downsample the full-resolution warp mask to patch grid size.
+            if warp_mask is not None:
+                mask_small = cv2.resize(warp_mask, (grid_size, grid_size),
+                                        interpolation=cv2.INTER_AREA)
+                valid_patches = (mask_small > 127).astype(np.float32)
+            else:
+                valid_patches = np.ones((grid_size, grid_size), dtype=np.float32)
 
             # Center weight mask: border patches get lower weight (alignment
             # artifacts are worst at edges), center patches get full weight.
@@ -779,6 +827,9 @@ class PipelineRunner:
             center_weight = np.exp(-(xx**2 + yy**2) / 0.8)
             center_weight = center_weight / center_weight.max()
             center_weight = 0.2 + 0.8 * center_weight  # floor at 0.2
+
+            # Combine center weight with warp validity
+            center_weight = center_weight * valid_patches
 
             weighted_change = change_map * center_weight
             total_weight = center_weight.sum()
