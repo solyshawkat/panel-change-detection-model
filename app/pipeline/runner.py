@@ -845,7 +845,7 @@ class PipelineRunner:
             )
 
             return {
-                "patch_similarity_map": sim_map,
+                "patch_similarity_map": neighbor_sim,
                 "changed_fraction": round(changed_fraction, 6),
                 "max_region": round(max_region, 6),
                 "mean": round(mean_change, 6),
