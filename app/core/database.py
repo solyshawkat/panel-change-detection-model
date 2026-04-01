@@ -65,7 +65,17 @@ async def init_db():
                     WHERE table_name = 'ai_comparisons' AND column_name = 'dino_patch_changed_fraction'
                 ) THEN
                     ALTER TABLE ai_comparisons ADD COLUMN dino_patch_changed_fraction FLOAT NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'ai_comparisons' AND column_name = 'dino_patch_max_region'
+                ) THEN
                     ALTER TABLE ai_comparisons ADD COLUMN dino_patch_max_region FLOAT NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'ai_comparisons' AND column_name = 'dino_patch_mean'
+                ) THEN
                     ALTER TABLE ai_comparisons ADD COLUMN dino_patch_mean FLOAT NULL;
                 END IF;
             END $$;
