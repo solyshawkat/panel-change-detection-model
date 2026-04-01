@@ -324,14 +324,6 @@ class PipelineRunner:
                 result.processing_ms = int((time.time() - start_time) * 1000)
                 return result
 
-            # Scale gate: reject extreme framing differences (same as verify)
-            scale = alignment_result.get("scale", 1.0)
-            if not (0.4 <= scale <= 2.5):
-                result.stopped_at = "M3_ALIGNMENT"
-                result.error = f"Alignment failed: scale={scale:.2f} outside 0.4-2.5 range (extreme framing difference)"
-                result.processing_ms = int((time.time() - start_time) * 1000)
-                return result
-
             patrol_warped = alignment_result["warped"]
             warp_mask = alignment_result["mask"]
 
