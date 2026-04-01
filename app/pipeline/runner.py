@@ -431,8 +431,8 @@ class PipelineRunner:
                 max_region = result.dino_patch_max_region
                 patch_mean = result.dino_patch_mean
 
-                if inliers >= 30:
-                    # Good alignment: pixel metrics + patch semantic signals
+                if inliers >= 100:
+                    # Strong alignment: patches are reliable, use them
                     ratio = (
                         0.30 * ssim
                         + 0.15 * edge
@@ -441,15 +441,22 @@ class PipelineRunner:
                         + 0.15 * changed_frac
                         + 0.15 * max_region
                     )
-                else:
-                    # Poor alignment: patch signals more reliable than pixel metrics
+                elif inliers >= 30:
+                    # Decent alignment: old proven formula
                     ratio = (
-                        0.15 * hist
-                        + 0.05 * ssim
-                        + 0.10 * dino_change
-                        + 0.30 * changed_frac
-                        + 0.25 * max_region
-                        + 0.15 * patch_mean
+                        0.35 * ssim
+                        + 0.20 * edge
+                        + 0.20 * hist
+                        + 0.25 * dino_change
+                    )
+                else:
+                    # Poor alignment: old formula (would be blocked by verify)
+                    ratio = (
+                        0.30 * hist
+                        + 0.15 * cluster
+                        + 0.15 * max_diff
+                        + 0.10 * ssim
+                        + 0.30 * dino_change
                     )
 
                 result.ratio = round(min(max(ratio, 0.0), 1.0), 4)
@@ -741,26 +748,53 @@ class PipelineRunner:
             p1 = torch.nn.functional.normalize(p1, dim=2)
             p2 = torch.nn.functional.normalize(p2, dim=2)
 
-            # Per-patch cosine similarity
-            sim = (p1 * p2).sum(dim=2).squeeze(0)  # (1369,)
-
             # Reshape to spatial grid
-            grid_size = int(np.sqrt(sim.shape[0]))
-            sim_map = sim.cpu().numpy().reshape(grid_size, grid_size)
+            grid_size = int(np.sqrt(p1.shape[1]))  # 37 for 518x518 input
+            g1 = p1.squeeze(0).cpu().numpy().reshape(grid_size, grid_size, -1)
+            g2 = p2.squeeze(0).cpu().numpy().reshape(grid_size, grid_size, -1)
+
+            # 3x3 neighborhood matching: each baseline patch (i,j) finds best
+            # cosine similarity in a 3x3 window around (i,j) in patrol.
+            # This absorbs residual misalignment from imperfect homography.
+            sim_map = np.zeros((grid_size, grid_size), dtype=np.float32)
+            for i in range(grid_size):
+                for j in range(grid_size):
+                    best_sim = -1.0
+                    for di in range(-1, 2):
+                        for dj in range(-1, 2):
+                            ni, nj = i + di, j + dj
+                            if 0 <= ni < grid_size and 0 <= nj < grid_size:
+                                s = float(np.dot(g1[i, j], g2[ni, nj]))
+                                if s > best_sim:
+                                    best_sim = s
+                    sim_map[i, j] = best_sim
+
             change_map = 1.0 - sim_map
 
-            # Patch metrics
-            changed_mask = change_map > 0.3
-            changed_fraction = float(changed_mask.sum()) / change_map.size
+            # Center weight mask: border patches get lower weight (alignment
+            # artifacts are worst at edges), center patches get full weight.
+            y = np.linspace(-1, 1, grid_size)
+            x = np.linspace(-1, 1, grid_size)
+            xx, yy = np.meshgrid(x, y)
+            center_weight = np.exp(-(xx**2 + yy**2) / 0.8)
+            center_weight = center_weight / center_weight.max()
+            center_weight = 0.2 + 0.8 * center_weight  # floor at 0.2
+
+            weighted_change = change_map * center_weight
+            total_weight = center_weight.sum()
+
+            # Patch metrics (center-weighted)
+            changed_mask = weighted_change > 0.3
+            changed_fraction = float((changed_mask * center_weight).sum()) / total_weight if total_weight > 0 else 0.0
 
             if changed_mask.any():
                 labeled, n_labels = ndimage.label(changed_mask)
-                region_sizes = ndimage.sum(changed_mask, labeled, range(1, n_labels + 1))
-                max_region = float(max(region_sizes)) / change_map.size if len(region_sizes) > 0 else 0.0
+                region_sizes = ndimage.sum(changed_mask * center_weight, labeled, range(1, n_labels + 1))
+                max_region = float(max(region_sizes)) / total_weight if len(region_sizes) > 0 else 0.0
             else:
                 max_region = 0.0
 
-            mean_change = float(change_map.mean())
+            mean_change = float((change_map * center_weight).sum()) / total_weight if total_weight > 0 else 0.0
 
             logger.debug(
                 f"DINOv2 patches: changed_frac={changed_fraction:.3f} "
