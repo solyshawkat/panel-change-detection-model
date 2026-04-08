@@ -97,7 +97,7 @@ async def verify_same_object(request: VerifyRequest):
     alignment_result = pipeline._run_m3_alignment(enhanced1, enhanced2)
     inliers = alignment_result["inliers"]
     scale = alignment_result.get("scale", 1.0)
-    is_aligned = inliers >= 15 and 0.25 <= scale <= 4.0
+    is_aligned = inliers >= 8 and 0.15 <= scale <= 6.0
 
     logger.info(
         f"Verify quality: blur={blur_score:.0f} brightness={brightness:.0f} "
