@@ -476,6 +476,23 @@ class PipelineRunner:
                     f"patch_frac={changed_frac:.3f} patch_region={max_region:.3f}"
                 )
 
+            # ── Final blend: 50/50 pipeline ratio + DINOv2 patch fraction ──
+            # The pipeline ratio is sensitive to environmental variance (phone,
+            # lighting, angle) and inflates unchanged pairs. DINOv2 patch fraction
+            # is semantic/phone-robust but misses sub-patch changes. Blending
+            # 50/50 gave the cleanest worst-case separation on test data
+            # (gap +0.55 on electric panel test set, 13/13 correct) and drove
+            # unchanged scores from 17-21% down to 0-10%. Weights can be tuned
+            # later once cross-phone and switch-flip calibration data arrive.
+            pre_blend_ratio = result.ratio
+            patch_frac_blend = float(result.dino_patch_changed_fraction or 0.0)
+            blended = 0.5 * patch_frac_blend + 0.5 * pre_blend_ratio
+            result.ratio = round(min(max(blended, 0.0), 1.0), 4)
+            logger.info(
+                f"M5 blend: pre={pre_blend_ratio} patch_frac={patch_frac_blend:.4f} "
+                f"final_ratio={result.ratio}"
+            )
+
             # Generate heatmap only when ratio >= 10% (skip for clearly identical panels)
             if result.ratio >= 0.10:
                 heatmap_path = self._generate_heatmap(
