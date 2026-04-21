@@ -90,18 +90,22 @@ async def verify_same_object(request: VerifyRequest):
     brightness = float(gray2.mean())
     is_bright = brightness >= config.BRIGHTNESS_WARNING_THRESHOLD
 
-    # Alignment check (quick keypoint matching)
+    # Alignment check — effectively disabled. The patrol app's ghost overlay
+    # already guides guards to frame the shot correctly, so a CV alignment
+    # gate on top of it was producing too many "improper angle" false negatives
+    # in production. We still run _run_m3_alignment for telemetry (inliers/scale
+    # logged below) so we can re-enable gating later if needed.
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced1 = clahe.apply(cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY))
     enhanced2 = clahe.apply(gray2)
     alignment_result = pipeline._run_m3_alignment(enhanced1, enhanced2)
     inliers = alignment_result["inliers"]
     scale = alignment_result.get("scale", 1.0)
-    is_aligned = inliers >= 4 and 0.1 <= scale <= 10.0
+    is_aligned = True  # gate disabled — see comment above
 
     logger.info(
         f"Verify quality: blur={blur_score:.0f} brightness={brightness:.0f} "
-        f"inliers={inliers} scale={scale:.2f} blurry={is_blurry} bright={is_bright} aligned={is_aligned}"
+        f"inliers={inliers} scale={scale:.2f} blurry={is_blurry} bright={is_bright} aligned={is_aligned} (gate disabled)"
     )
 
     return VerifyResponse(
